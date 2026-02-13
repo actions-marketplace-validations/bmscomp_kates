@@ -1,0 +1,65 @@
+apiVersion: litmuschaos.io/v1alpha1
+kind: ChaosEngine
+metadata:
+  name: kafka-disk-stress
+  namespace: kafka
+  labels:
+    app.kubernetes.io/managed-by: kates
+    kates.klster.com/scenario: disk-stress
+spec:
+  annotationCheck: 'false'
+  engineState: active
+  chaosServiceAccount: litmus-admin
+  experiments:
+    - name: pod-io-stress
+      spec:
+        components:
+          env:
+            - name: TOTAL_CHAOS_DURATION
+              value: '120'
+            - name: FILESYSTEM_UTILIZATION_PERCENTAGE
+              value: '80'
+            # Number of I/O workers
+            - name: NUMBER_OF_WORKERS
+              value: '4'
+            - name: APP_NS
+              value: 'kafka'
+            - name: APP_LABEL
+              value: 'strimzi.io/component-type=kafka'
+            - name: TARGET_PODS
+              value: 'krafter-pool-alpha-0'
+            # Container running Kafka within the pod
+            - name: TARGET_CONTAINER
+              value: 'kafka'
+        probe:
+          - name: verify-broker-healthy-after-stress
+            type: cmdProbe
+            mode: PostChaos
+            runProperties:
+              probeTimeout: "120s"
+              interval: "15s"
+              retry: 4
+            cmdProbe/inputs:
+              command: |
+                kubectl exec -n kafka krafter-pool-alpha-0 -- kafka-topics.sh \
+                  --bootstrap-server localhost:9092 \
+                  --describe --under-replicated-partitions 2>&1 | wc -l
+              comparator:
+                type: int
+                criteria: "<="
+                value: "1"
+          - name: verify-log-segments-intact
+            type: cmdProbe
+            mode: PostChaos
+            runProperties:
+              probeTimeout: "60s"
+              interval: "10s"
+              retry: 3
+            cmdProbe/inputs:
+              command: |
+                kubectl exec -n kafka krafter-pool-alpha-0 -- \
+                  find /var/lib/kafka/data -name "*.log" -type f | wc -l
+              comparator:
+                type: int
+                criteria: ">="
+                value: "1"
