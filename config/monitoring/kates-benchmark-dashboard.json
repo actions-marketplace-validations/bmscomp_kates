@@ -77,7 +77,7 @@
             "type": "stat",
             "targets": [
                 {
-                    "expr": "sum(kates_benchmark_records_total)",
+                    "expr": "sum(kates_benchmark_records_total{run_id=~\"$run_id\", test_type=~\"$test_type\"})",
                     "legendFormat": "Records",
                     "refId": "A"
                 }
@@ -105,7 +105,7 @@
             "type": "stat",
             "targets": [
                 {
-                    "expr": "sum(kates_benchmark_errors_total) or vector(0)",
+                    "expr": "sum(kates_benchmark_errors_total{run_id=~\"$run_id\", test_type=~\"$test_type\"}) or vector(0)",
                     "legendFormat": "Errors",
                     "refId": "A"
                 }
@@ -133,7 +133,7 @@
             "type": "stat",
             "targets": [
                 {
-                    "expr": "sum(kates_benchmark_sla_violations) or vector(0)",
+                    "expr": "sum(kates_benchmark_sla_violations{run_id=~\"$run_id\"}) or vector(0)",
                     "legendFormat": "Violations",
                     "refId": "A"
                 }
@@ -175,7 +175,7 @@
             "type": "timeseries",
             "targets": [
                 {
-                    "expr": "kates_benchmark_throughput_rec_sec",
+                    "expr": "kates_benchmark_throughput_rec_sec{run_id=~\"$run_id\", test_type=~\"$test_type\"}",
                     "legendFormat": "{{run_id}} - {{test_type}}",
                     "refId": "A"
                 }
@@ -205,7 +205,7 @@
             "type": "timeseries",
             "targets": [
                 {
-                    "expr": "kates_benchmark_throughput_mb_sec",
+                    "expr": "kates_benchmark_throughput_mb_sec{run_id=~\"$run_id\", test_type=~\"$test_type\"}",
                     "legendFormat": "{{run_id}} - {{test_type}}",
                     "refId": "A"
                 }
@@ -247,22 +247,22 @@
             "type": "timeseries",
             "targets": [
                 {
-                    "expr": "kates_benchmark_latency_ms{quantile=\"0.5\"}",
+                    "expr": "kates_benchmark_latency_ms{run_id=~\"$run_id\", test_type=~\"$test_type\", quantile=\"0.5\"}",
                     "legendFormat": "p50 {{run_id}}",
                     "refId": "A"
                 },
                 {
-                    "expr": "kates_benchmark_latency_ms{quantile=\"0.95\"}",
+                    "expr": "kates_benchmark_latency_ms{run_id=~\"$run_id\", test_type=~\"$test_type\", quantile=\"0.95\"}",
                     "legendFormat": "p95 {{run_id}}",
                     "refId": "B"
                 },
                 {
-                    "expr": "kates_benchmark_latency_ms{quantile=\"0.99\"}",
+                    "expr": "kates_benchmark_latency_ms{run_id=~\"$run_id\", test_type=~\"$test_type\", quantile=\"0.99\"}",
                     "legendFormat": "p99 {{run_id}}",
                     "refId": "C"
                 },
                 {
-                    "expr": "kates_benchmark_latency_ms{quantile=\"0.999\"}",
+                    "expr": "kates_benchmark_latency_ms{run_id=~\"$run_id\", test_type=~\"$test_type\", quantile=\"0.999\"}",
                     "legendFormat": "p99.9 {{run_id}}",
                     "refId": "D"
                 }
@@ -292,7 +292,7 @@
             "type": "timeseries",
             "targets": [
                 {
-                    "expr": "kates_benchmark_latency_ms_max",
+                    "expr": "kates_benchmark_latency_ms_max{run_id=~\"$run_id\", test_type=~\"$test_type\"}",
                     "legendFormat": "max {{run_id}}",
                     "refId": "A"
                 }
@@ -305,6 +305,108 @@
                 "w": 24,
                 "x": 0,
                 "y": 24
+            },
+            "id": 40,
+            "title": "Phase Detail",
+            "type": "row"
+        },
+        {
+            "datasource": "prometheus",
+            "fieldConfig": {
+                "defaults": {
+                    "unit": "ops"
+                }
+            },
+            "gridPos": {
+                "h": 8,
+                "w": 8,
+                "x": 0,
+                "y": 25
+            },
+            "id": 41,
+            "options": {
+                "legend": {
+                    "displayMode": "table",
+                    "placement": "bottom"
+                }
+            },
+            "title": "Throughput by Phase",
+            "type": "timeseries",
+            "targets": [
+                {
+                    "expr": "sum by (phase) (rate(kates_benchmark_records_total{run_id=~\"$run_id\", test_type=~\"$test_type\"}[30s]))",
+                    "legendFormat": "{{phase}}",
+                    "refId": "A"
+                }
+            ]
+        },
+        {
+            "datasource": "prometheus",
+            "fieldConfig": {
+                "defaults": {
+                    "unit": "ms"
+                }
+            },
+            "gridPos": {
+                "h": 8,
+                "w": 8,
+                "x": 8,
+                "y": 25
+            },
+            "id": 42,
+            "options": {
+                "legend": {
+                    "displayMode": "table",
+                    "placement": "bottom"
+                }
+            },
+            "title": "Latency by Phase (p99)",
+            "type": "timeseries",
+            "targets": [
+                {
+                    "expr": "kates_benchmark_latency_ms{run_id=~\"$run_id\", test_type=~\"$test_type\", quantile=\"0.99\"}",
+                    "legendFormat": "p99 {{phase}}",
+                    "refId": "A"
+                }
+            ]
+        },
+        {
+            "datasource": "prometheus",
+            "fieldConfig": {
+                "defaults": {
+                    "unit": "short"
+                }
+            },
+            "gridPos": {
+                "h": 8,
+                "w": 8,
+                "x": 16,
+                "y": 25
+            },
+            "id": 43,
+            "options": {
+                "legend": {
+                    "displayMode": "table",
+                    "placement": "bottom"
+                }
+            },
+            "title": "Records by Phase",
+            "type": "timeseries",
+            "targets": [
+                {
+                    "expr": "sum by (phase) (kates_benchmark_records_total{run_id=~\"$run_id\", test_type=~\"$test_type\"})",
+                    "legendFormat": "{{phase}}",
+                    "refId": "A"
+                }
+            ]
+        },
+        {
+            "collapsed": false,
+            "gridPos": {
+                "h": 1,
+                "w": 24,
+                "x": 0,
+                "y": 33
             },
             "id": 30,
             "title": "SLA & Errors",
@@ -321,7 +423,7 @@
                 "h": 8,
                 "w": 12,
                 "x": 0,
-                "y": 25
+                "y": 34
             },
             "id": 31,
             "options": {
@@ -333,7 +435,7 @@
             "type": "timeseries",
             "targets": [
                 {
-                    "expr": "rate(kates_benchmark_errors_total[1m])",
+                    "expr": "rate(kates_benchmark_errors_total{run_id=~\"$run_id\", test_type=~\"$test_type\"}[1m])",
                     "legendFormat": "{{run_id}} - {{phase}}",
                     "refId": "A"
                 }
@@ -350,7 +452,7 @@
                 "h": 8,
                 "w": 12,
                 "x": 12,
-                "y": 25
+                "y": 34
             },
             "id": 32,
             "options": {
@@ -362,7 +464,7 @@
             "type": "timeseries",
             "targets": [
                 {
-                    "expr": "sum by (metric, severity) (kates_benchmark_sla_violations)",
+                    "expr": "sum by (metric, severity) (kates_benchmark_sla_violations{run_id=~\"$run_id\"})",
                     "legendFormat": "{{metric}} ({{severity}})",
                     "refId": "A"
                 }
@@ -377,7 +479,28 @@
         "benchmark"
     ],
     "templating": {
-        "list": []
+        "list": [
+            {
+                "name": "run_id",
+                "type": "query",
+                "datasource": "prometheus",
+                "query": "label_values(kates_benchmark_records_total, run_id)",
+                "refresh": 2,
+                "multi": false,
+                "includeAll": true,
+                "allValue": ".*"
+            },
+            {
+                "name": "test_type",
+                "type": "query",
+                "datasource": "prometheus",
+                "query": "label_values(kates_benchmark_records_total, test_type)",
+                "refresh": 2,
+                "multi": true,
+                "includeAll": true,
+                "allValue": ".*"
+            }
+        ]
     },
     "time": {
         "from": "now-30m",
@@ -385,7 +508,7 @@
     },
     "timepicker": {},
     "timezone": "browser",
-    "title": "KATES Benchmark Overview",
+    "title": "KATES Benchmark & Phase",
     "uid": "kates-benchmark-overview",
-    "version": 1
+    "version": 2
 }
