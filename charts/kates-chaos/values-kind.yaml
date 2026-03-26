@@ -1,4 +1,5 @@
 # Kates Chaos — Kind Cluster Overlay
+# Optimized for single-node Kind with pre-loaded images
 
 litmus:
   enabled: true
@@ -76,6 +77,16 @@ monitoring:
     interval: 30s
     labels:
       release: monitoring
+  grafanaDashboard:
+    enabled: true
+    labels:
+      grafana_dashboard: "1"
+
+pdb:
+  enabled: false
+
+networkPolicies:
+  enabled: false
 
 experiments:
   enabled: true

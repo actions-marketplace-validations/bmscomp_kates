@@ -1,0 +1,97 @@
+# Kates Chaos — Generic Kubernetes Cluster Overlay
+# Cloud-native defaults for any standard Kubernetes environment
+
+litmus:
+  enabled: true
+  portal:
+    frontend:
+      replicas: 2
+      image:
+        pullPolicy: Always
+      resources:
+        requests:
+          memory: "256Mi"
+          cpu: "200m"
+        limits:
+          memory: "512Mi"
+          cpu: "500m"
+      service:
+        type: ClusterIP
+        port: 9091
+    server:
+      replicas: 2
+      graphqlServer:
+        image:
+          pullPolicy: Always
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "300m"
+          limits:
+            memory: "1Gi"
+            cpu: "1"
+      authServer:
+        replicas: 2
+        image:
+          pullPolicy: Always
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "200m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+  mongodb:
+    enabled: true
+    image:
+      registry: docker.io
+      repository: bitnami/mongodb
+      tag: "7.0.28"
+      pullPolicy: Always
+    architecture: replicaset
+    replicaCount: 3
+    arbiter:
+      enabled: true
+    volumePermissions:
+      enabled: true
+    persistence:
+      enabled: true
+      size: 10Gi
+      storageClass: ""
+    resources:
+      requests:
+        cpu: 500m
+        memory: 1Gi
+      limits:
+        cpu: 2
+        memory: 2Gi
+
+auth:
+  adminPassword: ""
+  existingSecret: ""
+
+rbac:
+  enabled: true
+  kafkaNamespace: kafka
+  katesNamespace: kates
+
+monitoring:
+  serviceMonitor:
+    enabled: true
+    interval: 15s
+    labels:
+      release: monitoring
+  grafanaDashboard:
+    enabled: true
+    labels:
+      grafana_dashboard: "1"
+
+pdb:
+  enabled: true
+
+networkPolicies:
+  enabled: true
+
+experiments:
+  enabled: true
+  image: bitnami/kubectl:latest
