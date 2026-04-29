@@ -1,0 +1,68 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Resilience Test: ROLLING_RESTART — Simulated Rolling Upgrade
+# ─────────────────────────────────────────────────────────────────────────────
+# Restarts all 3 broker pools one pod at a time with a 30s inter-restart delay,
+# mimicking Strimzi's rolling update during a version upgrade or config change.
+# The drain-cleaner path ensures controlled shutdown between restarts.
+#
+# Hypothesis:
+#   Each broker restart triggers a brief leader transfer. With 30s between
+#   restarts and acks=all, producers survive the full rolling restart with
+#   0 errors. ISR never drops below 2/3 (min.insync.replicas satisfied).
+#
+# Usage:
+#   kates resilience run -f cli/examples/resilience-rolling-restart.yaml
+# ─────────────────────────────────────────────────────────────────────────────
+
+testRequest:
+  type: ENDURANCE
+  spec:
+    topic: kates-results
+    partitions: 6
+    replicationFactor: 3
+    minInsyncReplicas: 2
+    durationMs: 300000        # 5 min — covers the full 3-broker rolling restart
+    numRecords: 900000
+    recordSize: 1024
+    throughput: 3000
+    numProducers: 3
+    numConsumers: 3
+    consumerGroup: rolling-restart-cg
+    acks: "all"
+    enableIdempotence: true
+    batchSize: 65536
+    lingerMs: 5
+    compressionType: lz4
+
+chaosSpec:
+  experimentName: rolling-restart-all-pools
+  disruptionType: ROLLING_RESTART
+  targetNamespace: kafka
+  targetLabel: "strimzi.io/cluster=krafter"
+  chaosDurationSec: 180      # 3 brokers × ~60s each
+  delayBeforeSec: 0
+  gracePeriodSec: 30         # 30s between each broker restart
+  envOverrides:
+    RESTART_INTERVAL_SEC: "30"
+
+steadyStateSec: 30
+maxRecoveryWaitSec: 120
+
+probes:
+  - name: isr-health-check
+    type: cmdProbe
+    mode: Continuous
+    command: "kafka-topics.sh --bootstrap-server localhost:9092 --describe --under-replicated-partitions 2>/dev/null | grep -c 'Topic:' || echo '0'"
+    expectedOutput: "50"
+    comparator: "<="
+    intervalSec: 10
+    timeoutSec: 30
+
+  - name: cluster-ready
+    type: k8sProbe
+    mode: Edge
+    command: "kafka Ready"
+    expectedOutput: "Ready"
+    comparator: contains
+    intervalSec: 15
+    timeoutSec: 30

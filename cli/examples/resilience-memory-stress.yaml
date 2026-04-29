@@ -1,0 +1,63 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Resilience Test: MEMORY_STRESS — Broker JVM Memory Pressure
+# ─────────────────────────────────────────────────────────────────────────────
+# Consumes 500 MB of native memory on a broker pod to simulate GC pressure
+# from a memory leak or a badly-tuned heap. Tests whether the broker OOM-kills
+# or degrades gracefully under sustained memory contention.
+#
+# Hypothesis:
+#   Memory pressure triggers more frequent GC pauses. Request handling slows.
+#   Producer p99 latency rises but the broker does not crash (OOM-kill would
+#   require >100% of the pod memory limit). ISR stays intact.
+#
+# Usage:
+#   kates resilience run -f cli/examples/resilience-memory-stress.yaml
+# ─────────────────────────────────────────────────────────────────────────────
+
+testRequest:
+  type: STRESS
+  spec:
+    topic: kates-events
+    partitions: 6
+    replicationFactor: 3
+    minInsyncReplicas: 2
+    numRecords: 1000000
+    recordSize: 1024
+    throughput: 5000
+    numProducers: 3
+    acks: "all"
+    enableIdempotence: true
+    batchSize: 65536
+    lingerMs: 5
+    compressionType: lz4
+
+chaosSpec:
+  experimentName: broker-memory-pressure
+  disruptionType: MEMORY_STRESS
+  targetNamespace: kafka
+  targetLabel: "strimzi.io/pool-name=brokers-sigma"
+  chaosDurationSec: 60
+  delayBeforeSec: 0
+  memoryMb: 500             # consume 500 MB of native memory
+
+steadyStateSec: 30
+maxRecoveryWaitSec: 90
+
+probes:
+  - name: producer-throughput
+    type: cmdProbe
+    mode: Continuous
+    command: "kafka-producer-perf-test.sh --topic kates-probe-topic --num-records 10 --record-size 100 --throughput -1 --producer-props bootstrap.servers=localhost:9092 2>/dev/null | tail -1 | awk '{print $6}'"
+    expectedOutput: "0"
+    comparator: ">"
+    intervalSec: 15
+    timeoutSec: 30
+
+  - name: cluster-ready
+    type: k8sProbe
+    mode: Edge
+    command: "kafka Ready"
+    expectedOutput: "Ready"
+    comparator: contains
+    intervalSec: 15
+    timeoutSec: 30

@@ -1,0 +1,67 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Resilience Test: NODE_DRAIN — Kubernetes Node Maintenance
+# ─────────────────────────────────────────────────────────────────────────────
+# Drains the Kubernetes node hosting the gamma broker pool.
+# The Strimzi Drain Cleaner intercepts the eviction webhook and triggers
+# a controlled Kafka shutdown before the pod is evicted, ensuring zero
+# partition downtime during node maintenance windows.
+#
+# Hypothesis:
+#   Drain Cleaner intercepts eviction → triggers controlled shutdown →
+#   partition leaders transferred off gamma → pod evicted → rescheduled.
+#   Zero partition unavailability. Producer errors = 0.
+#
+# Usage:
+#   kates resilience run -f cli/examples/resilience-node-drain.yaml
+# ─────────────────────────────────────────────────────────────────────────────
+
+testRequest:
+  type: ENDURANCE
+  spec:
+    topic: kates-results
+    partitions: 6
+    replicationFactor: 3
+    minInsyncReplicas: 2
+    durationMs: 300000
+    numRecords: 900000
+    recordSize: 1024
+    throughput: 3000
+    numProducers: 3
+    numConsumers: 3
+    consumerGroup: drain-test-cg
+    acks: "all"
+    enableIdempotence: true
+    batchSize: 65536
+    lingerMs: 5
+    compressionType: lz4
+
+chaosSpec:
+  experimentName: node-drain-gamma
+  disruptionType: NODE_DRAIN
+  targetNamespace: kafka
+  targetLabel: "strimzi.io/pool-name=brokers-gamma"
+  chaosDurationSec: 60
+  delayBeforeSec: 0
+  gracePeriodSec: 30
+
+steadyStateSec: 30
+maxRecoveryWaitSec: 180      # rescheduling takes longer than pod restart
+
+probes:
+  - name: isr-health-check
+    type: cmdProbe
+    mode: Continuous
+    command: "kafka-topics.sh --bootstrap-server localhost:9092 --describe --under-replicated-partitions 2>/dev/null | grep -c 'Topic:' || echo '0'"
+    expectedOutput: "50"
+    comparator: "<="
+    intervalSec: 10
+    timeoutSec: 30
+
+  - name: partition-availability
+    type: cmdProbe
+    mode: Continuous
+    command: "kafka-topics.sh --bootstrap-server localhost:9092 --describe --unavailable-partitions 2>/dev/null | grep -c 'Topic:' || echo '0'"
+    expectedOutput: "0"
+    comparator: "=="
+    intervalSec: 10
+    timeoutSec: 30

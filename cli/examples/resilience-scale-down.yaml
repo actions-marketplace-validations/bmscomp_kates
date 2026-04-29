@@ -1,0 +1,67 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Resilience Test: SCALE_DOWN — Broker Pool Contraction
+# ─────────────────────────────────────────────────────────────────────────────
+# Scales the sigma broker pool from 1 replica to 0, simulating an emergency
+# cordon or a planned capacity reduction. Verifies that Strimzi rebalances
+# partition leaders off sigma before the pod is terminated.
+#
+# Hypothesis:
+#   Strimzi refuses to scale down a broker with active partition assignments
+#   until all partitions are reassigned. Kates SCALE_DOWN disruption performs
+#   the reassignment before scaling. With RF=3 and 2 remaining brokers,
+#   min.isr=2 is still satisfied. Producers see no errors.
+#
+# Usage:
+#   kates resilience run -f cli/examples/resilience-scale-down.yaml
+# ─────────────────────────────────────────────────────────────────────────────
+
+testRequest:
+  type: ENDURANCE
+  spec:
+    topic: kates-metrics
+    partitions: 6
+    replicationFactor: 3
+    minInsyncReplicas: 2
+    durationMs: 180000        # 3 min — covers the full scale-down + recovery
+    numRecords: 540000
+    recordSize: 1024
+    throughput: 3000
+    numProducers: 3
+    numConsumers: 2
+    consumerGroup: scale-down-cg
+    acks: "all"
+    enableIdempotence: true
+    batchSize: 65536
+    lingerMs: 5
+    compressionType: lz4
+
+chaosSpec:
+  experimentName: scale-down-sigma
+  disruptionType: SCALE_DOWN
+  targetNamespace: kafka
+  targetLabel: "strimzi.io/pool-name=brokers-sigma"
+  chaosDurationSec: 60
+  delayBeforeSec: 0
+  gracePeriodSec: 30
+
+steadyStateSec: 30
+maxRecoveryWaitSec: 120
+
+probes:
+  - name: isr-health-check
+    type: cmdProbe
+    mode: Continuous
+    command: "kafka-topics.sh --bootstrap-server localhost:9092 --describe --under-replicated-partitions 2>/dev/null | grep -c 'Topic:' || echo '0'"
+    expectedOutput: "50"
+    comparator: "<="
+    intervalSec: 10
+    timeoutSec: 30
+
+  - name: cluster-ready
+    type: k8sProbe
+    mode: Edge
+    command: "kafka Ready"
+    expectedOutput: "Ready"
+    comparator: contains
+    intervalSec: 15
+    timeoutSec: 30

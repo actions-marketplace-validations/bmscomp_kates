@@ -1,0 +1,63 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Resilience Test: POD_DELETE — Graceful Broker Shutdown (SIGTERM)
+# ─────────────────────────────────────────────────────────────────────────────
+# Respects terminationGracePeriodSeconds. Kafka's controlled-shutdown protocol
+# transfers partition leaders before the pod exits, so clients should see
+# near-zero disruption.
+#
+# Hypothesis:
+#   Controlled shutdown completes within gracePeriodSec.
+#   Producer sees <5s latency spike during leader transfer.
+#   ISR stays at 3/3 throughout (no shrink expected).
+#
+# Usage:
+#   kates resilience run -f cli/examples/resilience-pod-delete.yaml
+# ─────────────────────────────────────────────────────────────────────────────
+
+testRequest:
+  type: LOAD
+  spec:
+    topic: kates-results
+    partitions: 6
+    replicationFactor: 3
+    minInsyncReplicas: 2
+    numRecords: 600000
+    recordSize: 1024
+    throughput: 2000
+    numProducers: 3
+    acks: "all"
+    enableIdempotence: true
+    batchSize: 65536
+    lingerMs: 5
+    compressionType: lz4
+
+chaosSpec:
+  experimentName: broker-graceful-shutdown
+  disruptionType: POD_DELETE
+  targetNamespace: kafka
+  targetLabel: "strimzi.io/pool-name=brokers-alpha"
+  chaosDurationSec: 60
+  delayBeforeSec: 0
+  gracePeriodSec: 30        # SIGTERM → 30s for controlled shutdown
+
+steadyStateSec: 30
+maxRecoveryWaitSec: 90
+
+probes:
+  - name: isr-health-check
+    type: cmdProbe
+    mode: Continuous
+    command: "kafka-topics.sh --bootstrap-server localhost:9092 --describe --under-replicated-partitions 2>/dev/null | grep -c 'Topic:' || echo '0'"
+    expectedOutput: "0"    # expect NO shrink during graceful shutdown
+    comparator: "=="
+    intervalSec: 10
+    timeoutSec: 30
+
+  - name: cluster-ready
+    type: k8sProbe
+    mode: Edge
+    command: "kafka Ready"
+    expectedOutput: "Ready"
+    comparator: contains
+    intervalSec: 15
+    timeoutSec: 30
