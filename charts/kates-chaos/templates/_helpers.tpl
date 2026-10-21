@@ -43,6 +43,15 @@ helm.sh/chart: {{ include "kates-chaos.chart" . }}
 {{- end }}
 
 {{/*
+Pod template labels: the chart's own labels (a YAML string) plus podLabels.
+The chart's own win on a clash, so a selector never changes.
+Usage: include "kates-chaos.podLabels" (list . (include "kates-chaos.selectorLabels" .))
+*/}}
+{{- define "kates-chaos.podLabels" -}}
+{{- toYaml (merge (index . 1 | fromYaml) ((index . 0).Values.podLabels | default dict)) -}}
+{{- end }}
+
+{{/*
 Common annotations (empty unless commonAnnotations is set).
 */}}
 {{- define "kates-chaos.annotations" -}}
@@ -83,6 +92,15 @@ experiments.image (string), then the images.kubectl dict.
 {{- else -}}
 {{- include "kates-chaos.image" (dict "img" .Values.images.kubectl "global" .Values.global) -}}
 {{- end -}}
+{{- end }}
+
+{{/*
+Image GameDay and the Helm tests run: kates-tester, which has the shell their
+scripts need, with global.imageRegistry prepended.
+*/}}
+{{- define "kates-chaos.testerImage" -}}
+{{- $registry := (.Values.global | default dict).imageRegistry | default "" -}}
+{{- if $registry -}}{{- printf "%s/%s" $registry .Values.images.tester -}}{{- else -}}{{- .Values.images.tester -}}{{- end -}}
 {{- end }}
 
 {{/*
