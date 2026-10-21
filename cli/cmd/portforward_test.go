@@ -893,6 +893,53 @@ func TestRepairLocalAPIPortForward_StartsOnlyKatesAPI(t *testing.T) {
 	}
 }
 
+// An account with edit in its own namespace may not list Services in every
+// namespace (the kates chart's rbac.scope=namespace is made for one).
+func TestDiscoverServices_FallsBackToTheAppAndKafkaNamespaces(t *testing.T) {
+	origExec, origKubeContext := runExecOutputFn, portsKubeContext
+	origKafkaNS, origAppNS := portsKafkaNS, portsAppNS
+	t.Cleanup(func() {
+		runExecOutputFn, portsKubeContext = origExec, origKubeContext
+		portsKafkaNS, portsAppNS = origKafkaNS, origAppNS
+	})
+	portsKubeContext = ""
+	portsKafkaNS, portsAppNS = "kafka", "team"
+
+	const columns = " --no-headers -o custom-columns=NS:.metadata.namespace,NAME:.metadata.name"
+	var calls []string
+	runExecOutputFn = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		call := strings.Join(args, " ")
+		calls = append(calls, call)
+		if call == "get svc -n team"+columns {
+			return []byte("team kates\n"), nil
+		}
+		return nil, errors.New(`services is forbidden: User "alice" cannot list resource "services"`)
+	}
+
+	got := discoverServices(context.Background())
+
+	if len(got) != 1 || !got["team/kates"] {
+		t.Errorf("discovered %v, want only team/kates", got)
+	}
+	want := []string{"get svc -A" + columns, "get svc -n team" + columns, "get svc -n kafka" + columns}
+	if strings.Join(calls, "\n") != strings.Join(want, "\n") {
+		t.Errorf("kubectl calls:\n%s\nwant:\n%s", strings.Join(calls, "\n"), strings.Join(want, "\n"))
+	}
+	if specs := matchSpecs(got); len(specs) == 0 || specs[0].Namespace != "team" {
+		t.Errorf("matchSpecs(%v) = %+v, want the Kates API in team", got, specs)
+	}
+
+	// An unreachable cluster refuses nothing: other namespaces would only wait as long again.
+	calls = nil
+	runExecOutputFn = func(_ context.Context, _ string, args ...string) ([]byte, error) {
+		calls = append(calls, strings.Join(args, " "))
+		return nil, errors.New("Unable to connect to the server: dial tcp 127.0.0.1:6443: connect: connection refused")
+	}
+	if got := discoverServices(context.Background()); len(got) != 0 || len(calls) != 1 {
+		t.Errorf("unreachable cluster: discovered %v after %d kubectl calls, want nothing after 1", got, len(calls))
+	}
+}
+
 func TestRepairLocalAPIPortForward_SkipsNonPortsContext(t *testing.T) {
 	port := freeLocalPort(t)
 	origClient, origContext, origOverride := apiClient, activeContext, apiURLOverridden

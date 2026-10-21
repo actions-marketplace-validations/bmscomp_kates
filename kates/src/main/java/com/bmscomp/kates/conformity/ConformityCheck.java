@@ -9,6 +9,7 @@ import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -36,6 +37,8 @@ import io.fabric8.kubernetes.api.model.PodAffinityTerm;
 import io.fabric8.kubernetes.api.model.PodAntiAffinity;
 import io.fabric8.kubernetes.api.model.Quantity;
 import io.fabric8.kubernetes.api.model.ResourceRequirements;
+import io.fabric8.kubernetes.api.model.discovery.v1.Endpoint;
+import io.fabric8.kubernetes.api.model.discovery.v1.EndpointSlice;
 import io.fabric8.kubernetes.client.KubernetesClient;
 import io.fabric8.kubernetes.client.KubernetesClientException;
 import io.fabric8.kubernetes.client.dsl.base.CustomResourceDefinitionContext;
@@ -115,7 +118,7 @@ public class ConformityCheck {
 
     /**
      * @throws ClientErrorException a 409 when the reference is for another cluster, or the Kafka is missing
-     * @throws ServiceUnavailableException when the Kubernetes API does not answer
+     * @throws ServiceUnavailableException when the Kubernetes API does not answer, or refuses the Kafka CR's get
      */
     public ConformityReport check(KafkaReference reference) {
         return new Run(reference).report();
@@ -162,14 +165,33 @@ public class ConformityCheck {
                         .stream()
                         .collect(Collectors.toMap(c -> c.getMetadata().getName(), Function.identity())));
 
-        private final Source<Map<String, Map<String, String>>> nodeLabels = new Source<>(
-                "Kubernetes: nodes",
-                () -> client.nodes().list().getItems().stream()
-                        .collect(Collectors.toMap(
-                                n -> n.getMetadata().getName(),
-                                n -> n.getMetadata().getLabels() == null
-                                        ? Map.of()
-                                        : n.getMetadata().getLabels())));
+        /**
+         * Each node's labels. A namespace-scoped role, such as the kates chart's
+         * with rbac.scope=namespace, may not list nodes, which are cluster-scoped;
+         * then the default zone label comes from the EndpointSlices of Strimzi's
+         * headless Service instead.
+         */
+        private final Source<NodeLabels> nodeLabels = new Source<>("Kubernetes: nodes", () -> {
+            try {
+                return new NodeLabels(
+                        client.nodes().list().getItems().stream()
+                                .collect(Collectors.toMap(
+                                        n -> n.getMetadata().getName(),
+                                        n -> n.getMetadata().getLabels() == null
+                                                ? Map.of()
+                                                : n.getMetadata().getLabels())),
+                        null);
+            } catch (KubernetesClientException e) {
+                if (e.getCode() != 403) {
+                    throw e;
+                }
+            }
+            if (!DEFAULT_ZONE_LABEL.equals(zoneLabel())) {
+                throw new IllegalStateException("Forbidden: the Kates API's service account may not list nodes,"
+                        + " which are cluster-scoped, and only nodes carry " + zoneLabel());
+            }
+            return endpointZones();
+        });
 
         /** With kafka.source brokers only: the brokers Kafka reports, and their effective configs. */
         private final Source<Collection<Node>> brokers =
@@ -221,21 +243,41 @@ public class ConformityCheck {
                     return configs;
                 });
 
-        /** Null when the PodMonitor CRD is not installed: then there is none, which is the answer. */
-        private final Source<List<GenericKubernetesResource>> podMonitors =
-                new Source<>("Kubernetes: PodMonitors in any namespace", () -> {
-                    try {
-                        return client.genericKubernetesResources(POD_MONITOR_CRD)
+        /**
+         * Every namespace's PodMonitors, or with a namespace-scoped role only
+         * the Kafka namespace's. Null items when the PodMonitor CRD is not
+         * installed: then there is none, which is the answer.
+         */
+        private final Source<Monitors> podMonitors = new Source<>("Kubernetes: PodMonitors in any namespace", () -> {
+            try {
+                return new Monitors(
+                        client.genericKubernetesResources(POD_MONITOR_CRD)
                                 .inAnyNamespace()
                                 .list()
-                                .getItems();
-                    } catch (KubernetesClientException e) {
-                        if (e.getCode() == 404) {
-                            return null;
-                        }
-                        throw e;
-                    }
-                });
+                                .getItems(),
+                        false);
+            } catch (KubernetesClientException e) {
+                if (e.getCode() == 404) {
+                    return new Monitors(null, false);
+                }
+                if (e.getCode() != 403) {
+                    throw e;
+                }
+            }
+            try {
+                return new Monitors(
+                        client.genericKubernetesResources(POD_MONITOR_CRD)
+                                .inNamespace(namespace)
+                                .list()
+                                .getItems(),
+                        true);
+            } catch (KubernetesClientException e) {
+                if (e.getCode() == 404) {
+                    return new Monitors(null, true);
+                }
+                throw e;
+            }
+        });
 
         private final Source<String> kubernetesVersion = new Source<>(
                 "Kubernetes: /version", () -> client.getKubernetesVersion().getGitVersion());
@@ -263,6 +305,11 @@ public class ConformityCheck {
                         .withName(name)
                         .get();
             } catch (KubernetesClientException e) {
+                if (e.getCode() == 403) {
+                    throw new ServiceUnavailableException("The Kates API's service account may not get"
+                            + " kafkas.kafka.strimzi.io in " + ns + ": bind it a Role there that grants it,"
+                            + " such as the kates chart's with rbac.scope=namespace");
+                }
                 throw new ServiceUnavailableException("Kubernetes API not available: " + e.getMessage());
             }
             if (found == null) {
@@ -480,7 +527,8 @@ public class ConformityCheck {
          */
         private Observation<Integer> zoned(
                 String roleLabel, String zoneLabel, Function<Map<String, Integer>, Integer> measure) {
-            Map<String, Map<String, String>> labels = nodeLabels.get();
+            NodeLabels nodes = nodeLabels.get();
+            Map<String, Map<String, String>> labels = nodes.byNode();
             Map<String, Integer> perZone = new TreeMap<>();
             Map<String, Integer> values = new LinkedHashMap<>();
             for (Pod pod : rolePods(roleLabel)) {
@@ -502,7 +550,55 @@ public class ConformityCheck {
                 detail = (detail.isEmpty() ? "" : detail + "; ") + (values.size() - 1)
                         + " not scheduled on a node with " + zoneLabel;
             }
+            if (nodes.from() != null) {
+                detail = (detail.isEmpty() ? "" : detail + "; ") + "zones from " + nodes.from();
+            }
             return new Observation<>(values, detail.isEmpty() ? null : detail);
+        }
+
+        /**
+         * The default zone label of each node a Kafka pod runs on, as the
+         * EndpointSlice controller copies it onto the endpoints of Strimzi's
+         * headless Service, which lists every Kafka pod, Ready or not. A pod
+         * with no address yet has no endpoint, so it counts as not in a zone
+         * unless another Kafka pod shares its node.
+         */
+        private NodeLabels endpointZones() {
+            String service = cluster + "-kafka-brokers";
+            List<EndpointSlice> slices;
+            try {
+                slices = client.discovery()
+                        .v1()
+                        .endpointSlices()
+                        .inNamespace(namespace)
+                        .withLabel("kubernetes.io/service-name", service)
+                        .list()
+                        .getItems();
+            } catch (KubernetesClientException e) {
+                if (e.getCode() == 403) {
+                    throw new IllegalStateException("Forbidden: the Kates API's service account may list neither"
+                            + " nodes, which are cluster-scoped, nor EndpointSlices in " + namespace);
+                }
+                throw e;
+            }
+            Map<String, Map<String, String>> byNode = new HashMap<>();
+            for (EndpointSlice slice : slices) {
+                for (Endpoint endpoint : slice.getEndpoints() == null ? List.<Endpoint>of() : slice.getEndpoints()) {
+                    if (endpoint.getNodeName() != null) {
+                        Map<String, String> labels =
+                                byNode.computeIfAbsent(endpoint.getNodeName(), n -> new HashMap<>());
+                        if (endpoint.getZone() != null) {
+                            labels.put(DEFAULT_ZONE_LABEL, endpoint.getZone());
+                        }
+                    }
+                }
+            }
+            if (byNode.isEmpty()) {
+                throw new IllegalStateException("Forbidden: the Kates API's service account may not list nodes,"
+                        + " which are cluster-scoped, and no EndpointSlice of " + namespace + "/" + service
+                        + " names a node");
+            }
+            return new NodeLabels(byNode, "the EndpointSlices of " + namespace + "/" + service);
         }
 
         private String zoneLabel() {
@@ -532,15 +628,15 @@ public class ConformityCheck {
                     crKafka + ".kafkaExporter",
                     () -> scalar(at(kafka, "spec", "kafkaExporter") != null));
             rule("monitoring.podMonitor", rules.podMonitor(), meets(rules.podMonitor()), podMonitors.name, () -> {
-                List<GenericKubernetesResource> monitors = podMonitors.get();
-                if (monitors == null) {
+                Monitors monitors = podMonitors.get();
+                if (monitors.items() == null) {
                     return new Observation<>(Map.of("", false), "the PodMonitor CRD is not installed");
                 }
                 List<Pod> brokerPods = rolePods("strimzi.io/broker-role");
                 if (brokerPods.isEmpty()) {
                     return new Observation<>(Map.of("", false), "no broker pod to select");
                 }
-                List<String> selecting = monitors.stream()
+                List<String> selecting = monitors.items().stream()
                         .filter(m -> watches(m, namespace)
                                 && brokerPods.stream()
                                         .allMatch(p -> matches(
@@ -549,6 +645,11 @@ public class ConformityCheck {
                         .map(m -> m.getMetadata().getNamespace() + "/"
                                 + m.getMetadata().getName())
                         .toList();
+                if (selecting.isEmpty() && monitors.ownNamespaceOnly()) {
+                    // One in a namespace it may not list could still select them.
+                    throw new Unreadable("Forbidden: the Kates API's service account may not list PodMonitors"
+                            + " outside " + namespace + ", and none in " + namespace + " selects every broker pod");
+                }
                 return new Observation<>(
                         Map.of("", !selecting.isEmpty()),
                         selecting.isEmpty() ? "no PodMonitor selects every broker pod" : String.join(", ", selecting));
@@ -728,7 +829,7 @@ public class ConformityCheck {
                     throw new Unreadable(String.join("; ", unread));
                 }
             } else {
-                Map<String, Map<String, String>> labels = nodeLabels.get();
+                Map<String, Map<String, String>> labels = nodeLabels.get().byNode();
                 without = rolePods("strimzi.io/broker-role").stream()
                         .filter(p -> p.getSpec().getNodeName() == null
                                 || !labels.getOrDefault(p.getSpec().getNodeName(), Map.of())
@@ -1239,6 +1340,12 @@ public class ConformityCheck {
 
     /** Each broker's config by id, and each broker whose config could not be read, with why. */
     private record BrokerConfigs(Map<String, Config> configs, List<String> unread) {}
+
+    /** Each node's labels by name, and where they came from when not the nodes themselves. */
+    private record NodeLabels(Map<String, Map<String, String>> byNode, String from) {}
+
+    /** The PodMonitors read, null when the CRD is missing, and whether they are only the Kafka namespace's. */
+    private record Monitors(List<GenericKubernetesResource> items, boolean ownNamespaceOnly) {}
 
     /** A source that could not be read: the rules that need it are UNKNOWN. */
     private static final class Unreadable extends RuntimeException {

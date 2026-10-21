@@ -176,8 +176,13 @@ data:
   KATES_TESTS_ROUNDTRIP_DURATION_MS: {{ .Values.tests.roundtrip.durationMs | default .Values.defaults.durationMs | quote }}
   KATES_TESTS_ROUNDTRIP_NUM_PRODUCERS: {{ .Values.tests.roundtrip.numProducers | default .Values.defaults.numProducers | quote }}
   KATES_TESTS_ROUNDTRIP_NUM_CONSUMERS: {{ .Values.tests.roundtrip.numConsumers | default .Values.defaults.numConsumers | quote }}
-  {{- with .Values.chaos.provider }}
+  {{- $namespaced := eq .Values.rbac.scope "namespace" }}
+  {{- with .Values.chaos.provider | default (ternary "noop" "" $namespaced) }}
   KATES_CHAOS_PROVIDER: {{ . | quote }}
+  {{- end }}
+  {{- if $namespaced }}
+  {{- /* The namespace the conformity check reads is the one its Role is granted in. */}}
+  KATES_TOPOLOGY_KAFKA_NAMESPACE: {{ tpl (.Values.networkPolicy.kafka.namespace | default "kafka") . | quote }}
   {{- end }}
 
   {{- with .Values.faultTolerance }}

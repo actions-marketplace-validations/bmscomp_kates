@@ -90,10 +90,33 @@ that namespace (`kates/docs/deployment.md` runs one in `kates`) needs a
 | `containerSecurityContext.readOnlyRootFilesystem` | `true` | Read-only root FS |
 | `containerSecurityContext.allowPrivilegeEscalation` | `false` | Block privilege escalation |
 | `serviceAccount.create` | `true` | Create a ServiceAccount |
-| `rbac.create` | `true` | Create the backend's ClusterRole/ClusterRoleBinding (Litmus CRDs, Strimzi resources, cluster reads; no Secrets) |
+| `rbac.create` | `true` | Create the RBAC objects `rbac.scope` calls for |
+| `rbac.scope` | `cluster` | `cluster`: the backend's ClusterRole/ClusterRoleBinding (Litmus CRDs, Strimzi resources, cluster reads; no Secrets). `namespace`: nothing cluster-scoped; see [Namespace-only install](#namespace-only-install) |
+| `rbac.kafkaNamespaceRole` | `true` | With `rbac.scope=namespace`, render the conformity check's read-only Role in the Kafka namespace |
 | `rbac.directChaos` | `false` | Grant the writes the direct Kubernetes chaos backend makes; see [Chaos permissions](#chaos-permissions) |
 | `rbac.cdcSecretNamespaces` | `[]` | Namespaces where the `INTEGRATION_CDC` test may read its database's password; see [Secret access](#secret-access) |
-| `rbac.extraRules` | `[]` | Additional RBAC rules to append |
+| `rbac.extraRules` | `[]` | Additional RBAC rules to append to the ClusterRole (`rbac.scope=cluster` only) |
+
+### Namespace-only install
+
+`rbac.scope=namespace` installs Kates with no cluster-scoped object. Performance and `INTEGRITY` tests make no Kubernetes call. Chaos is off: `KATES_CHAOS_PROVIDER` is `noop` unless `chaos.provider` is set. A conformity check reads the Kafka namespace, `networkPolicy.kafka.namespace` (the chart sets `KATES_TOPOLOGY_KAFKA_NAMESPACE` from it), through one read-only Role:
+
+| Resource | Verbs |
+|----------|-------|
+| `kafka.strimzi.io` `kafkas` | `get` |
+| `kafka.strimzi.io` `kafkanodepools` | `list` |
+| `pods`, `persistentvolumeclaims` | `list` |
+| `monitoring.coreos.com` `podmonitors` | `list` |
+| `discovery.k8s.io` `endpointslices` | `list` |
+
+An installer with only `edit` in the release namespace can't create that Role, so it installs with `rbac.kafkaNamespaceRole=false` as well. Kubernetes lets an account create a Role only for permissions it holds itself, so an account with Strimzi's and the Prometheus Operator's reads in the Kafka namespace, a cluster admin where those operators don't add them to `admin`, renders it from the same release name, namespace and values, and applies it:
+
+```bash
+helm template kates charts/kates -n team -f team-values.yaml \
+  --set rbac.kafkaNamespaceRole=true --show-only templates/rbac.yaml | kubectl apply -f -
+```
+
+Without node access, a conformity check takes each Kafka pod's zone for `zones`, `skew` and `kafka.rackAwareness` (source `cr`) from the EndpointSlices of Strimzi's headless Service, which carry only `topology.kubernetes.io/zone`; with another `zoneLabel` those rules are `UNKNOWN`. It finds PodMonitors only in the Kafka namespace.
 
 ### Secret access
 
