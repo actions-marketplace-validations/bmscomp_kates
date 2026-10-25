@@ -11,7 +11,7 @@ version: 0.14.2
 # a BUILD-TIME property (quarkus.messaging.health.enabled=false), so they only
 # exist in the image built from this branch. Keep appVersion and
 # image.tag in values.yaml pinned to that release.
-appVersion: "1.30.0"
+appVersion: "1.30.1"
 keywords:
   - kafka
   - testing
