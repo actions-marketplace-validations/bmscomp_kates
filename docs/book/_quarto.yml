@@ -15,8 +15,12 @@ book:
   cover-image-alt: "Kates — The Definitive Guide"
   favicon: assets/kates-mark.svg
   site-url: https://bmscomp.github.io/kates/
-  open-graph: true
-  twitter-card: true
+  google-analytics: "G-WG001H7Y0M"
+  open-graph:
+    image: assets/cover.png
+  twitter-card:
+    image: assets/cover.png
+    card-style: summary_large_image
   repo-url: https://github.com/bmscomp/kates
   repo-subdir: docs/book
   repo-actions: [edit, issue]
