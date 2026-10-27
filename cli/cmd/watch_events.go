@@ -19,10 +19,6 @@ var (
 	watchInfoStyle = lipgloss.NewStyle().
 			Foreground(theme.Info)
 
-	watchWarnStyle = lipgloss.NewStyle().
-			Foreground(theme.Warning).
-			Bold(true)
-
 	watchErrStyle = lipgloss.NewStyle().
 			Foreground(theme.Error).
 			Bold(true)
@@ -123,5 +119,6 @@ func init() {
 	watchEventsCmd.Flags().StringVar(&watchType, "type", "", "Filter by test type (LOAD, STRESS, etc.)")
 	watchEventsCmd.Flags().StringVar(&watchID, "id", "", "Watch a specific test ID")
 	watchEventsCmd.Flags().BoolVarP(&watchFollow, "follow", "f", true, "Continuously follow events")
+	registerWatchEventsCompletions()
 	rootCmd.AddCommand(watchEventsCmd)
 }
