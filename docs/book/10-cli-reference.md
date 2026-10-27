@@ -923,6 +923,7 @@ kates report export <id> --format junit
 kates report export <id> --format md
 kates report export <id> --format heatmap > heatmap.json
 kates report export <id> --format heatmap-csv > heatmap.csv
+kates report export <id> --format junit -f results.xml
 ```
 
 | Format | Description |
@@ -934,7 +935,12 @@ kates report export <id> --format heatmap-csv > heatmap.csv
 | `heatmap` | Latency heatmap as JSON |
 | `heatmap-csv` | Latency heatmap as CSV |
 
-When run in a terminal, the export is written to an auto-named file (e.g. `kates-report-<id>.csv`); when piped or redirected, it goes to stdout. For the full report as JSON, use the global output flag instead: `kates report show <id> -o json`. The `junit` format needs a finished run: until the run is `DONE` or `FAILED` the Kates API answers `409 Conflict`, and the command fails rather than write a suite that reads as passed.
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--format` | `csv` | One of the formats above |
+| `-f`, `--file` | | Write to this file instead of the command's default; `-` writes to stdout |
+
+With `-f` the export goes to that file. Without it, in a terminal it goes to an auto-named file (e.g. `kates-report-<id>.csv`) in the current directory; piped, redirected or with `--plain`, it goes to stdout, for every format including `html`. For the full report as JSON, use the global output flag instead: `kates report show <id> -o json`. The `junit` format needs a finished run: until the run is `DONE` or `FAILED` the Kates API answers `409 Conflict`, and the command fails rather than write a suite that reads as passed.
 
 #### report diff
 
@@ -2068,8 +2074,18 @@ Run a LOAD, a STRESS and a SPIKE test one after another, grade each from its pea
 ```bash
 kates benchmark
 kates bench
+kates benchmark --records 100000 --timeout 10m
 kates benchmark -o json
 ```
+
+The two flags are the ones `kates gate` shares:
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--records` | 50000 | Number of records each test run sends |
+| `--timeout` | `30m` | How long to wait for each phase's run: a duration such as `10m`, or a number of seconds |
+
+Each test scores from 0 to 100: 50 × min(throughput / 50,000, 1) for throughput plus max(0, 50 − 5 × P99 ms) for latency. A score of 90 or more is an A, 80 a B, 70 a C, 60 a D and anything less an F; the overall grade averages the scores. `kates benchmark --help` prints the same formula.
 
 With `-o json` it prints only the scorecard, once the battery ends: per test its `runId`, `status`, peak throughput, highest P99, `score` and `grade`, and the `overallGrade`. A metric no phase reported is `null`, as the table's `—` is. The scorecard takes each test's status from its run, so a run that finished `FAILED` shows as `FAILED` whether or not one of its phases carried an error message. A test that could not be created shows as `FAILED`. A run with no final status when `--timeout` passes (default `30m`; a duration such as `10m`, or a number of seconds), or whose status could not be read three polls in a row, shows as `ERROR`, because it may still be going; the battery stops there, and the tests after it show as `SKIPPED`. The command exits `0` in every one of these cases. Ctrl-C cancels the run it is waiting for and exits `130`.
 
@@ -2140,7 +2156,17 @@ With `-o json` stdout carries only the result, once the test exists: the `runId`
 | `--type` | `LOAD` | Test type to run |
 | `--records` | 50000 | Number of records |
 | `--backend` | | Benchmark backend |
-| `--timeout` | 180 | Seconds to wait for the run; when they pass, the run is cancelled and the gate fails |
+| `--timeout` | `180` | How long to wait for the run: a duration such as `10m`, or a number of seconds as before; when it passes, the run is cancelled and the gate fails |
+
+The grade comes from the run's average throughput and P99, and a run must clear both numbers of a rung; `kates gate --help` prints the same ladder.
+
+| Grade | Throughput | P99 |
+|-------|-----------|-----|
+| A | ≥ 50,000 rec/s | < 5 ms |
+| B | ≥ 30,000 rec/s | < 20 ms |
+| C | ≥ 15,000 rec/s | < 50 ms |
+| D | ≥ 5,000 rec/s | < 200 ms |
+| F | anything below D | |
 
 #### test baseline
 
@@ -2611,7 +2637,7 @@ kates test list -o table
 kates test list -o json
 ```
 
-Many commands have no JSON form and print the same output whatever `-o` says, among them `status`, `ctx show`, `snapshot`, `profile`, `kyverno`, `test compare`, `test summary`, `webhook list`, `changelog` and the full-screen views (`dashboard`, `top`, `lab`). Check a command's output before you pipe it into `jq`.
+Under `-o json` a command puts one JSON document on stdout and nothing else. A command with no JSON form prints nothing on stdout, says so on stderr and exits `2`, so a script never parses a table by mistake: among them `webhook list`, `theme list`, `plugin list`, `profile list`, `snapshot list`, `changelog`, `test compare`, `test summary` and `test flame`.
 
 An AI agent that has a shell can drive Kates through this CLI rather than through [`kates mcp`](#mcp-server-for-ai-agents). The skill file `skills/kates-cli/SKILL.md` at the root of the repository tells it how: set up a context with the API key, pass `-o json`, and follow one recipe for each task, from security posture and drift to planning a Game Day with `disruption playbook show` and `--dry-run`.
 
@@ -2625,13 +2651,13 @@ For most commands the exit code is a contract: `0` means the thing you asked for
 |------|---------|
 | `0` | The requested operation completed — a `--wait` test finished successfully, a deploy applied, a deletion was confirmed and performed |
 | `1` | The operation failed, a followed test finished `FAILED`, the connection was lost mid-follow (outcome unknown), or a confirmation was declined or could not be asked |
-| `2` | `kates conformity check` could not tell whether a rule holds, or could not run the check; `kates detect --fail-on-error` found failing compatibility checks or could not inspect the cluster; `kates auto` could not inspect a cluster it reached (an unreachable cluster exits `1`) |
+| `2` | Kates could not tell, so neither yes nor no: `kates conformity check` could not tell whether a rule holds, or could not run the check; `kates detect --fail-on-error` found failing compatibility checks or could not inspect the cluster; `kates auto` could not inspect a cluster it reached (an unreachable cluster exits `1`); a command with no JSON form was run with `-o json` (`webhook list`, `theme list`, `plugin list`, `profile list`, `snapshot list`, `changelog`, `test compare`, `test summary`, `test flame`), which prints nothing on stdout and says so on stderr |
 | `130` | Ctrl-C or SIGTERM stopped a command that starts work and waits for it, after it cancelled the test it started |
 
 Consequences worth knowing in scripts:
 
 - `kates test create --wait` and `kates test watch` exit `1` when the test itself fails — not just when the request fails.
-- `test apply --wait`, `test create --wait`, `replay --wait`, `gate` and `benchmark` cancel the run they are waiting for when interrupted, and exit `130`. `disruption run` and `disruption playbook run` exit `130` too, but their plan keeps running, since the Kates API cannot cancel one. Every other command ends on the first Ctrl-C and leaves anything it started running.
+- `test apply --wait`, `test create --wait`, `replay --wait`, `gate`, `benchmark` and `flow run` cancel the run they are waiting for when interrupted, and exit `130`. `kates detect` stops its probes and exits `130` too. `disruption run` and `disruption playbook run` exit `130` too, but their plan keeps running, since the Kates API cannot cancel one. Every other command ends on the first Ctrl-C and leaves anything it started running.
 - `kates cluster alerts` exits `1` wherever a critical alert rule is defined, firing or not, which on a default install means always — see its section above.
 - A declined confirmation exits `1` in `deploy`, `clean`, `kafka delete-topic`, `kyverno apply` and `migrate`. A script that forgot `--yes` fails loudly instead of reporting success for work it did not do.
 - Those confirmations are never answered implicitly. With no terminal attached, the command fails and tells you to pass `--yes`, rather than assuming either answer.
