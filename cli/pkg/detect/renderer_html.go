@@ -2,13 +2,19 @@ package detect
 
 import (
 	"fmt"
+	"html"
 	"io"
+	"sort"
 	"strings"
 )
 
 // RenderHTML generates a single-file, highly interactive, and beautifully designed HTML report.
 func RenderHTML(report *DetectReport, w io.Writer) error {
 	var b strings.Builder
+	// Every value that comes from the cluster (names, versions, check details,
+	// remediation commands) is escaped: a node named <script> must read as
+	// text, and a hint's <node-name> placeholder must survive the browser.
+	esc := html.EscapeString
 
 	// Setup document and styles
 	b.WriteString(`<!DOCTYPE html>
@@ -311,7 +317,7 @@ func RenderHTML(report *DetectReport, w io.Writer) error {
 	if provider == "" {
 		provider = "unknown"
 	}
-	b.WriteString(fmt.Sprintf(`
+	fmt.Fprintf(&b, `
   <div class="header-card">
     <h1>Cluster Compatibility Report</h1>
     <p>Automated preflight infrastructure auditor for 3-AZ Kafka deployments</p>
@@ -322,7 +328,7 @@ func RenderHTML(report *DetectReport, w io.Writer) error {
       <div><strong>Server Host:</strong> %s</div>
     </div>
   </div>
-`, report.K8sVersion, report.K8sVersion, strings.ToUpper(provider), report.Context, report.Server))
+`, esc(report.K8sVersion), esc(report.K8sVersion), esc(strings.ToUpper(provider)), esc(report.Context), esc(report.Server))
 
 	// ── 2. VERDICT BANNER ──
 	verdictClass := "verdict-pass"
@@ -335,11 +341,11 @@ func RenderHTML(report *DetectReport, w io.Writer) error {
 		verdictText = fmt.Sprintf("⚠ COMPATIBLE WITH WARNINGS: %d potential operational warnings detected.", report.Verdict.Warns)
 	}
 
-	b.WriteString(fmt.Sprintf(`
+	fmt.Fprintf(&b, `
   <div class="verdict-banner %s">
     %s
   </div>
-`, verdictClass, verdictText))
+`, verdictClass, verdictText)
 
 	// ── 3. DOUBLE-COLUMN STATS ──
 	b.WriteString(`  <div class="grid-2">`)
@@ -378,7 +384,7 @@ func RenderHTML(report *DetectReport, w io.Writer) error {
 		}
 	}
 
-	b.WriteString(fmt.Sprintf(`
+	fmt.Fprintf(&b, `
     <div class="card">
       <h2>Sizing Advisor Profile</h2>
       <div style="background-color:rgba(88,166,255,0.05); padding:1rem; border-radius:8px; border:1px dashed var(--border-color); margin-bottom:1.5rem">
@@ -407,7 +413,7 @@ func RenderHTML(report *DetectReport, w io.Writer) error {
         </div>
       </div>
     </div>
-`, profileName, profileDesc, report.Budget.NeedCPU, report.Budget.TotalCPU, pctCPU, pctCPU, report.Budget.NeedMem, report.Budget.TotalMem, pctMem, pctMem))
+`, esc(profileName), profileDesc, report.Budget.NeedCPU, report.Budget.TotalCPU, pctCPU, pctCPU, report.Budget.NeedMem, report.Budget.TotalMem, pctMem, pctMem)
 
 	// Column B: Security & Isolation Audit
 	enforcedLabel := report.Security.PSALabelEnforced
@@ -431,7 +437,7 @@ func RenderHTML(report *DetectReport, w io.Writer) error {
 		rbacStatus = "⚠️ Wildcard roles detected"
 	}
 
-	b.WriteString(fmt.Sprintf(`
+	fmt.Fprintf(&b, `
     <div class="card">
       <h2>Security & Isolation Standards</h2>
       <table style="margin-top:0">
@@ -459,9 +465,9 @@ func RenderHTML(report *DetectReport, w io.Writer) error {
         </tbody>
       </table>
     </div>
-`, enforcedLabel, report.Security.KyvernoEnforced, report.Security.PermissionsOk,
+`, esc(enforcedLabel), report.Security.KyvernoEnforced, report.Security.PermissionsOk,
 		selectColor(!report.Security.HasExcessivePrivileges), rbacStatus,
-		selectColor(certAlerts == 0), certStatus))
+		selectColor(certAlerts == 0), certStatus)
 
 	b.WriteString(`  </div>`) // End grid-2
 
@@ -487,7 +493,7 @@ func RenderHTML(report *DetectReport, w io.Writer) error {
 			dataStatus = "fail"
 		}
 
-		b.WriteString(fmt.Sprintf(`
+		fmt.Fprintf(&b, `
       <div class="%s" data-status="%s">
         <div>
           <div class="check-title">%s</div>
@@ -495,7 +501,7 @@ func RenderHTML(report *DetectReport, w io.Writer) error {
         </div>
         <span class="status-badge %s">%s</span>
       </div>
-`, itemClass, dataStatus, c.Description, c.Detail, badgeClass, badgeText))
+`, itemClass, dataStatus, esc(c.Description), esc(c.Detail), badgeClass, badgeText)
 	}
 
 	b.WriteString(`
@@ -503,16 +509,11 @@ func RenderHTML(report *DetectReport, w io.Writer) error {
   </div>
 `)
 
-	// ── 5. AZ LATENCY MATRIX (IF AVAILABLE) ──
-	hasLatencyData := false
-	for _, n := range report.Nodes {
-		if n.Zone != "" && n.Zone != "-" {
-			hasLatencyData = true
-			break
-		}
-	}
-
-	if hasLatencyData && len(report.Nodes) >= 2 {
+	// ── 5. AZ LATENCY MATRIX (IF MEASURED) ──
+	// The matrix is what the inter-zone ping probe measured; a report without
+	// one (read-only run, single zone, probe failed) gets no section rather
+	// than invented numbers.
+	if len(report.Network.LatencyMatrix) > 0 {
 		b.WriteString(`
   <div class="card">
     <h2>Inter-AZ Network Latency Matrix</h2>
@@ -521,40 +522,39 @@ func RenderHTML(report *DetectReport, w io.Writer) error {
         <tr>
           <th>Source \ Destination</th>
 `)
-		// Headers
 		zonesMap := make(map[string]bool)
-		for _, n := range report.Nodes {
-			if n.Zone != "" && n.Zone != "-" {
-				zonesMap[n.Zone] = true
-			}
+		latency := make(map[[2]string]LatencyResult, len(report.Network.LatencyMatrix))
+		for _, r := range report.Network.LatencyMatrix {
+			zonesMap[r.SourceZone] = true
+			zonesMap[r.TargetZone] = true
+			latency[[2]string{r.SourceZone, r.TargetZone}] = r
 		}
 		var zonesList []string
 		for z := range zonesMap {
 			zonesList = append(zonesList, z)
 		}
+		sort.Strings(zonesList)
 
 		for _, z := range zonesList {
-			b.WriteString(fmt.Sprintf("          <th style=\"text-align:center\">%s</th>\n", z))
+			fmt.Fprintf(&b, "          <th style=\"text-align:center\">%s</th>\n", esc(z))
 		}
 		b.WriteString(`        </tr>
       </thead>
       <tbody>
 `)
 
-		// Make latency lookup helper
 		for _, src := range zonesList {
-			b.WriteString(fmt.Sprintf("        <tr>\n          <td><strong>%s</strong></td>\n", src))
+			fmt.Fprintf(&b, "        <tr>\n          <td><strong>%s</strong></td>\n", esc(src))
 			for _, dst := range zonesList {
-				// Default latency representation
-				latVal := "0.08ms"
-				if src == dst {
-					latVal = "0.05ms"
-				} else if strings.Contains(src, "alpha") && strings.Contains(dst, "sigma") {
-					latVal = "0.12ms"
-				} else if strings.Contains(src, "sigma") && strings.Contains(dst, "alpha") {
-					latVal = "0.11ms"
+				latVal := "—"
+				if r, ok := latency[[2]string{src, dst}]; ok {
+					if r.Success {
+						latVal = fmt.Sprintf("%.2fms", r.AvgMs)
+					} else {
+						latVal = "FAIL"
+					}
 				}
-				b.WriteString(fmt.Sprintf("          <td class=\"matrix-cell\">%s</td>\n", latVal))
+				fmt.Fprintf(&b, "          <td class=\"matrix-cell\">%s</td>\n", latVal)
 			}
 			b.WriteString("        </tr>\n")
 		}
@@ -577,13 +577,13 @@ func RenderHTML(report *DetectReport, w io.Writer) error {
 			if h.Severity == "critical" {
 				criticalClass = "critical"
 			}
-			b.WriteString(fmt.Sprintf(`
+			fmt.Fprintf(&b, `
     <div class="remediation-block %s">
       <div class="remediation-title">%s</div>
       <div class="remediation-summary">%s</div>
       <pre>%s</pre>
     </div>
-`, criticalClass, h.Check, h.Summary, strings.Join(h.Commands, "\n")))
+`, criticalClass, esc(h.Check), esc(h.Summary), esc(strings.Join(h.Commands, "\n")))
 		}
 		b.WriteString(`  </div>`)
 	}
