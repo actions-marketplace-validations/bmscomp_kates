@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/bmscomp/kates/cli/client"
+	"github.com/bmscomp/kates/cli/pkg/theme"
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -171,7 +172,7 @@ func (m groupsModel) viewList() string {
 		list.WriteString(listRow(label, i == m.cursor) + "\n")
 	}
 
-	listPane := lipgloss.NewStyle().Width(listWidth).Render(list.String())
+	listPane := theme.OpenPane(lipgloss.NewStyle().Width(listWidth), true, list.String())
 
 	var detailStr string
 	if m.cursor < len(m.groups) {
@@ -188,7 +189,7 @@ func (m groupsModel) viewList() string {
 	if detailWidth < 20 {
 		detailWidth = 40
 	}
-	detailPane := detailBox().Width(detailWidth).Render(detailStr)
+	detailPane := theme.Box(detailBox().Width(detailWidth), false, detailStr)
 
 	return lipgloss.JoinHorizontal(lipgloss.Top, listPane, detailPane)
 }
@@ -225,7 +226,7 @@ func (m groupsModel) viewDetail() string {
 
 	b.WriteString("\n" + dimStyle.Render(hint(groupsKeys().Back)))
 
-	return detailBox().Width(m.width - 4).Render(b.String())
+	return theme.Box(detailBox().Width(m.width-4), true, b.String())
 }
 
 // lagLabel colours a lag: green at zero, amber otherwise.

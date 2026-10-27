@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/bmscomp/kates/cli/client"
+	"github.com/bmscomp/kates/cli/pkg/theme"
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -130,7 +131,7 @@ func (m brokersModel) View() string {
 		list.WriteString(listRow(label, i == m.cursor) + "\n")
 	}
 
-	listPane := lipgloss.NewStyle().Width(listWidth).Render(list.String())
+	listPane := theme.OpenPane(lipgloss.NewStyle().Width(listWidth), true, list.String())
 
 	b := m.info.Brokers[m.cursor]
 	isCtrl := fmt.Sprintf("%v", b.ID) == controllerID
@@ -159,7 +160,7 @@ func (m brokersModel) View() string {
 	if detailWidth < 20 {
 		detailWidth = 40
 	}
-	detailPane := detailBox().Width(detailWidth).Render(detail)
+	detailPane := theme.Box(detailBox().Width(detailWidth), false, detail)
 
 	return lipgloss.JoinHorizontal(lipgloss.Top, listPane, detailPane)
 }

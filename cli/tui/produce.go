@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/bmscomp/kates/cli/client"
+	"github.com/bmscomp/kates/cli/pkg/theme"
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
@@ -243,7 +244,7 @@ func (m produceModel) viewTopicSelect() string {
 		list.WriteString(listRow(label, vi == m.cursor) + "\n")
 	}
 
-	listPane := lipgloss.NewStyle().Width(listWidth).Render(list.String())
+	listPane := theme.OpenPane(lipgloss.NewStyle().Width(listWidth), true, list.String())
 
 	var detailStr string
 	if m.cursor < len(m.topics) {
@@ -271,7 +272,7 @@ func (m produceModel) viewTopicSelect() string {
 	if detailWidth < 20 {
 		detailWidth = 40
 	}
-	detailPane := detailBox().Width(detailWidth).Render(detailStr)
+	detailPane := theme.Box(detailBox().Width(detailWidth), false, detailStr)
 
 	return lipgloss.JoinHorizontal(lipgloss.Top, listPane, detailPane)
 }
@@ -304,7 +305,7 @@ func (m produceModel) viewInput() string {
 	k := produceKeys()
 	b.WriteString(dimStyle.Render(hint(k.NextField, k.Send, k.Back)))
 
-	return detailBox().Width(m.width - 4).Render(b.String())
+	return theme.Box(detailBox().Width(m.width-4), true, b.String())
 }
 
 // helpBindings are the keys of the view on screen. In the input every other

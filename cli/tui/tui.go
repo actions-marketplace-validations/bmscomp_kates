@@ -7,6 +7,8 @@ import (
 	"unicode/utf8"
 
 	"github.com/bmscomp/kates/cli/client"
+	"github.com/bmscomp/kates/cli/output"
+	"github.com/bmscomp/kates/cli/pkg/theme"
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -50,8 +52,10 @@ func New(c *client.Client) Model {
 
 func Run(c *client.Client) error {
 	m := New(c)
+	theme.FullScreen()
 	p := tea.NewProgram(m, tea.WithAltScreen())
 	_, err := p.Run()
+	output.KeepHint()
 	return err
 }
 
@@ -127,6 +131,12 @@ func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case key.Matches(msg, k.JumpTab):
 		m.active = tab(msg.String()[0] - '1')
+		return m, nil
+	case key.Matches(msg, k.Look):
+		theme.NextLook()
+		return m, nil
+	case key.Matches(msg, k.Colors):
+		theme.NextPalette()
 		return m, nil
 	case key.Matches(msg, topicsKeys().Filter) && m.active == tabTopics && m.topics.view == topicsList:
 		m.filtering = true
@@ -211,7 +221,7 @@ func (m Model) helpBindings() []key.Binding {
 			return view
 		}
 	}
-	return append(view, k.NextTab, k.PrevTab, k.JumpTab, k.Quit)
+	return append(view, k.NextTab, k.PrevTab, k.JumpTab, k.Look, k.Colors, k.Quit)
 }
 
 func (m Model) View() string {
@@ -257,19 +267,20 @@ func (m Model) View() string {
 	}
 	content += "\n" + help
 
-	return content
+	return theme.Screen(content, m.width, m.height)
 }
 
 func (m Model) renderTabs() string {
+	active, inactive, gapStyle := tabStyles()
 	var tabs []string
 	for i, t := range m.tabs {
 		if tab(i) == m.active {
-			tabs = append(tabs, activeTabStyle.Render(t))
+			tabs = append(tabs, active.Render(t))
 		} else {
-			tabs = append(tabs, inactiveTabStyle.Render(t))
+			tabs = append(tabs, inactive.Render(t))
 		}
 	}
 	row := lipgloss.JoinHorizontal(lipgloss.Bottom, tabs...)
-	gap := tabGapStyle.Width(m.width - lipgloss.Width(row)).Render("")
+	gap := gapStyle.Width(m.width - lipgloss.Width(row)).Render("")
 	return lipgloss.JoinHorizontal(lipgloss.Bottom, row, gap)
 }

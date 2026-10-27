@@ -3,6 +3,7 @@ package tui
 import (
 	"strings"
 
+	"github.com/bmscomp/kates/cli/pkg/theme"
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/lipgloss"
 )
@@ -44,8 +45,27 @@ func wrapHelp(entries []string, sep string, width int) []string {
 	return lines
 }
 
+// lookHelp is the help for bindings drawn in the current look, wrapped to
+// width; nil in Classic, whose callers draw their own.
+func lookHelp(bindings []key.Binding, width int) []string {
+	if theme.CurrentLook().Classic() {
+		return nil
+	}
+	items := make([]string, 0, len(bindings))
+	for _, b := range bindings {
+		// "key: desc", because a key's help can hold spaces: "W (shift+w)".
+		if h := b.Help(); h.Key != "" {
+			items = append(items, h.Key+": "+h.Desc)
+		}
+	}
+	return theme.KeyHints(items, width)
+}
+
 // renderHelp is the dashboard's help bar for bindings, wrapped to width.
 func renderHelp(bindings []key.Binding, width int) string {
+	if lines := lookHelp(bindings, width-2); lines != nil {
+		return " " + strings.Join(lines, "\n ")
+	}
 	sep := " " + glyphs().Dot + " "
 	// The bar's padding takes a cell either side.
 	lines := wrapHelp(helpEntries(bindings), sep, width-2)
@@ -63,7 +83,7 @@ func hint(bindings ...key.Binding) string {
 // listRow is one row of a list pane, marked when it holds the cursor.
 func listRow(label string, selected bool) string {
 	if selected {
-		return selectedItemStyle.Render(glyphs().Arrow + " " + label)
+		return theme.Pick(selectedItemStyle, glyphs().Arrow+" "+label)
 	}
 	return listItemStyle.Render("  " + label)
 }

@@ -17,6 +17,7 @@ import (
 
 	"github.com/bmscomp/kates/cli/output"
 	"github.com/bmscomp/kates/cli/pkg/detect"
+	"github.com/bmscomp/kates/cli/pkg/theme"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
 )
@@ -448,6 +449,7 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 	if isTesting {
 		p = tea.NewProgram(dashboard, tea.WithoutRenderer(), tea.WithInput(nil))
 	} else if IsInteractive() && !accessibleUI() {
+		theme.FullScreen()
 		p = tea.NewProgram(dashboard, tea.WithAltScreen())
 	}
 	dl = &DashboardController{p: p}
@@ -502,6 +504,7 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 		final, err := p.Run()
 		// The window is gone: what the deploy still says goes to the terminal.
 		dl.closed.Store(true)
+		output.KeepHint()
 		if m, ok := final.(deployDashboardModel); ok && m.interrupted {
 			output.Warn("Deploy window closed; the deploy goes on and prints below. Ctrl-C again stops kates, which can leave a Helm release half-applied.")
 		}

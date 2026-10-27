@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/bmscomp/kates/cli/client"
+	"github.com/bmscomp/kates/cli/pkg/theme"
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -267,7 +268,7 @@ func (m topicsModel) viewList() string {
 		list.WriteString(listRow(label, vi == m.cursor) + "\n")
 	}
 
-	listPane := lipgloss.NewStyle().Width(listWidth).Render(list.String())
+	listPane := theme.OpenPane(lipgloss.NewStyle().Width(listWidth), true, list.String())
 
 	t := m.selectedTopic()
 	var detailStr string
@@ -285,7 +286,7 @@ func (m topicsModel) viewList() string {
 	if detailWidth < 20 {
 		detailWidth = 40
 	}
-	detailPane := detailBox().Width(detailWidth).Render(detailStr)
+	detailPane := theme.Box(detailBox().Width(detailWidth), false, detailStr)
 
 	return lipgloss.JoinHorizontal(lipgloss.Top, listPane, detailPane)
 }
@@ -344,7 +345,7 @@ func (m topicsModel) viewDetail() string {
 	k := topicsKeys()
 	b.WriteString("\n" + dimStyle.Render(hint(k.Consume, k.Back)))
 
-	return detailBox().Width(m.width - 4).Render(b.String())
+	return theme.Box(detailBox().Width(m.width-4), true, b.String())
 }
 
 func (m topicsModel) viewConsume() string {
@@ -386,7 +387,7 @@ func (m topicsModel) viewConsume() string {
 		}
 	}
 
-	return detailBox().Width(m.width - 4).Render(b.String())
+	return theme.Box(detailBox().Width(m.width-4), true, b.String())
 }
 
 // helpBindings are the keys of the view on screen.

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/bmscomp/kates/cli/client"
+	"github.com/bmscomp/kates/cli/output"
 	"github.com/bmscomp/kates/cli/pkg/theme"
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
@@ -172,8 +173,10 @@ func NewLab(c *client.Client, url string) LabModel {
 
 func RunLab(c *client.Client, url string) error {
 	m := NewLab(c, url)
+	theme.FullScreen()
 	p := tea.NewProgram(m, tea.WithAltScreen())
 	final, err := p.Run()
+	output.KeepHint()
 	// Quitting mid-run used to cancel only the local context; the server-side
 	// test kept running, orphaned, burning cluster resources with nothing
 	// watching it. Best-effort cancel after the program exits — commands
@@ -458,6 +461,12 @@ func (m *LabModel) updateFileKey(msg tea.KeyMsg) {
 		} else {
 			m.status = healthyStyle.Render(g.Check + " Session saved to " + path)
 		}
+	case key.Matches(msg, k.Look):
+		name := theme.NextLook()
+		m.status = dimStyle.Render("Look: " + name + "  " + g.Dot + "  T for the next  " + g.Dot + "  kates look set " + name + " keeps it")
+	case key.Matches(msg, k.Colors):
+		name := theme.NextPalette()
+		m.status = dimStyle.Render("Colors: " + name + "  " + g.Dot + "  C for the next  " + g.Dot + "  kates theme set " + name + " keeps it")
 	case key.Matches(msg, k.Load):
 		if path, ok := m.loadSession(); ok {
 			m.status = healthyStyle.Render(g.Check + " Session loaded from " + path)
@@ -593,14 +602,18 @@ func (m LabModel) View() string {
 	}
 
 	g := glyphs()
-	headerText := "  Kates Lab"
+	rest := ""
 	if w >= 60 {
-		headerText += "  " + g.Dot + "  Interactive Performance Tuning"
+		rest += "  " + g.Dot + "  Interactive Performance Tuning"
 	}
 	if w >= 100 && m.apiURL != "" {
-		headerText += "  " + g.To + "  " + m.apiURL
+		rest += "  " + g.To + "  " + m.apiURL
 	}
-	header := labHeaderStyle.Width(w - 2).Render(headerText)
+	headerW := w - 2
+	if l := theme.CurrentLook(); l.FrameAll && w >= 80 {
+		headerW = w // as wide as the framed panes below it
+	}
+	header := ScreenHeader("Kates Lab", rest, headerW)
 
 	var body string
 
@@ -609,9 +622,7 @@ func (m LabModel) View() string {
 		contentW := w - 4
 		leftContent := m.viewParams(contentW)
 		rightContent := m.viewResults(contentW - 4)
-		rightPane := detailBox().
-			Width(contentW).
-			Render(rightContent)
+		rightPane := theme.Box(detailBox().Width(contentW), false, rightContent)
 		body = leftContent + "\n" + rightPane
 	} else {
 		// Side-by-side: normal (35/65 at 80-119) or wide (50/50 at ≥120)
@@ -629,14 +640,14 @@ func (m LabModel) View() string {
 		leftContent := m.viewParams(leftW)
 		rightContent := m.viewResults(rightW - 6)
 
-		leftPane := lipgloss.NewStyle().
-			Width(leftW).
-			Padding(1, 2).
-			Render(leftContent)
-
-		rightPane := detailBox().
-			Width(rightW).
-			Render(rightContent)
+		left := lipgloss.NewStyle().Width(leftW).Padding(1, 2)
+		if theme.OpenPaneInset() > 0 {
+			// The frame takes the two columns the screen leaves spare and one
+			// of the padding, so the parameters keep all their room.
+			left = left.Width(leftW+theme.OpenPaneInset()-1).Padding(1, 1)
+		}
+		leftPane := theme.OpenPane(left, true, leftContent)
+		rightPane := theme.Box(detailBox().Width(rightW), false, rightContent)
 
 		body = lipgloss.JoinHorizontal(lipgloss.Top, leftPane, rightPane)
 	}
@@ -653,20 +664,9 @@ func (m LabModel) View() string {
 		}
 	}
 
-	help := m.renderHelp(m.helpBindings(), w)
+	help := HelpLines(m.helpBindings(), w)
 
-	return header + "\n\n" + body + statusBar + help
-}
-
-// renderHelp is the lab's help for bindings, wrapped to maxWidth, one
-// indented line each.
-func (m LabModel) renderHelp(bindings []key.Binding, maxWidth int) string {
-	sep := "  " + glyphs().Dot + "  "
-	var sb strings.Builder
-	for _, l := range wrapHelp(helpEntries(bindings), sep, maxWidth-4) {
-		sb.WriteString("\n  " + dimStyle.Render(l))
-	}
-	return sb.String()
+	return theme.Screen(header+"\n\n"+body+statusBar+help, m.width, m.height)
 }
 
 // helpBindings are the keys that act on the screen as it is.
@@ -695,7 +695,7 @@ func (m LabModel) helpBindings() []key.Binding {
 	if m.view != labConfig {
 		bindings = append(bindings, k.Back)
 	}
-	return append(bindings, k.Quit)
+	return append(bindings, k.Look, k.Colors, k.Quit)
 }
 
 func (m LabModel) viewParams(width int) string {
@@ -769,7 +769,7 @@ func (m LabModel) viewParams(width int) string {
 				padded := fmt.Sprintf(" %-*s", valPad, v)
 				actualIdx := startIdx + vi
 				if actualIdx == p.Current {
-					b.WriteString(selectedValueStyle.Render(padded))
+					b.WriteString(theme.Pick(selectedValueStyle, padded))
 				} else {
 					b.WriteString(dimStyle.Render(padded))
 				}

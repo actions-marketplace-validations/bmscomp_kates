@@ -26,6 +26,9 @@ type tabsKeyMap struct {
 	PrevTab key.Binding
 	JumpTab key.Binding
 
+	Look   key.Binding
+	Colors key.Binding
+
 	FilterApply key.Binding
 	FilterClear key.Binding
 	FilterErase key.Binding
@@ -38,6 +41,8 @@ func tabsKeys() tabsKeyMap {
 		NextTab: bind("tab", "next tab", "tab"),
 		PrevTab: bind("shift+tab", "previous tab", "shift+tab"),
 		JumpTab: bind("1-4", "go to tab", "1", "2", "3", "4"),
+		Look:    lookKey(),
+		Colors:  colorsKey(),
 
 		FilterApply: bind("enter", "apply filter", "enter"),
 		FilterClear: bind("esc", "clear filter", "esc"),
@@ -45,6 +50,12 @@ func tabsKeys() tabsKeyMap {
 		FilterType:  key.NewBinding(key.WithHelp("type", "to filter")),
 	}
 }
+
+// lookKey switches to the next look on the spot.
+func lookKey() key.Binding { return bind("T (shift+t)", "next look", "T") }
+
+// colorsKey switches to the next color theme on the spot.
+func colorsKey() key.Binding { return bind("C (shift+c)", "next colors", "C") }
 
 // navKeys are the vertical cursor bindings every list shares.
 func navKeys() (up, down key.Binding) {
@@ -152,6 +163,8 @@ type labKeyMap struct {
 	Load    key.Binding
 	Retry   key.Binding
 	Back    key.Binding
+	Look    key.Binding
+	Colors  key.Binding
 	Quit    key.Binding
 
 	// While a run is in flight only these act.
@@ -178,6 +191,8 @@ func labKeys() labKeyMap {
 		Load:    bind("L (shift+l)", "load session", "L"),
 		Retry:   bind("r", "retry", "r"),
 		Back:    bind("esc", "back to the results", "esc", "escape"),
+		Look:    lookKey(),
+		Colors:  colorsKey(),
 		Quit:    bind("q", "quit", "q", "ctrl+c"),
 
 		Cancel:    bind("x", "cancel the run", "x"),

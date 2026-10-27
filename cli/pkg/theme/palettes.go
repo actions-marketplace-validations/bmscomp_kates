@@ -1,13 +1,13 @@
 package theme
 
 import (
+	"fmt"
 	"os"
-	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
-	"gopkg.in/yaml.v3"
 )
 
 // Palette is one complete set of design tokens. Every role has a light and a
@@ -116,24 +116,31 @@ func Names() []string {
 
 // Requested is the theme asked for, before checking it exists: KATES_THEME,
 // else `theme:` in ~/.kates.yaml, else "".
-func Requested() string {
-	if v := strings.TrimSpace(os.Getenv("KATES_THEME")); v != "" {
-		return strings.ToLower(v)
+func Requested() string { return pick(os.Getenv("KATES_THEME"), readUserConfig().Theme) }
+
+// ActivePalette names the palette kates draws with now.
+func ActivePalette() string { return activeName }
+
+// UsePalette switches the palette: every style built from the tokens draws
+// with it from now on. Call it from the goroutine that renders.
+func UsePalette(name string) error {
+	name = strings.ToLower(strings.TrimSpace(name))
+	p, ok := Palettes[name]
+	if !ok {
+		return fmt.Errorf("unknown theme: %s (use: %s)", name, strings.Join(Names(), ", "))
 	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return ""
-	}
-	data, err := os.ReadFile(filepath.Join(home, ".kates.yaml"))
-	if err != nil {
-		return ""
-	}
-	var cfg struct {
-		Theme string `yaml:"theme"`
-	}
-	// A config that does not parse is the CLI's to report, not the theme's.
-	_ = yaml.Unmarshal(data, &cfg)
-	return strings.ToLower(strings.TrimSpace(cfg.Theme))
+	Active, activeName = p, name
+	paneFill = paneFillOf(Active.Surface)
+	return nil
+}
+
+// NextPalette switches to the palette after the active one and returns its
+// name.
+func NextPalette() string {
+	names := Names()
+	name := names[(slices.Index(names, activeName)+1)%len(names)]
+	_ = UsePalette(name)
+	return name
 }
 
 // Selected is the theme this process uses: the requested one when it exists,
