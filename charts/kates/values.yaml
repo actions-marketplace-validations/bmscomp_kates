@@ -29,7 +29,7 @@ image:
   repository: ghcr.io/bmscomp/kates
   # -- Image tag. Must be the release that carries the non-blocking health
   # endpoints the probe defaults below depend on (>= 1.22.0).
-  tag: "1.31.0"
+  tag: "1.32.0"
   # -- Image pull policy
   pullPolicy: IfNotPresent
 
@@ -71,6 +71,12 @@ rbac:
   # an account that may grant those reads applies them from
   # `helm template ... --show-only templates/rbac.yaml`.
   kafkaNamespaceRole: true
+  # -- With scope namespace: render a ClusterRole and ClusterRoleBinding that
+  # grant get and list on nodes, so a conformity check reads any zoneLabel.
+  # It is cluster-scoped: an installer with only edit leaves it false, and a
+  # cluster admin applies it from
+  # `helm template ... --set rbac.nodeReads=true --show-only templates/rbac.yaml`.
+  nodeReads: false
   # -- Grant the writes the direct Kubernetes chaos backend makes itself
   # (KATES_CHAOS_PROVIDER=kubernetes, or hybrid without Litmus): StatefulSet
   # scaling and pod ephemeral containers. Litmus runs its

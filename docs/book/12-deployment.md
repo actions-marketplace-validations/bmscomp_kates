@@ -939,6 +939,14 @@ The Role is `kates-kafka-reader-team` in the `kafka` namespace, and it only read
 
 Without the Role, a conformity check stops before its first rule: the Kates API answers 503 and says which grant is missing.
 
+Optionally, the cluster admin also lets the check read nodes. Nodes are cluster-scoped, so this is a ClusterRole, `kates-node-reader-team`, with `get` and `list` on `nodes` and nothing else. With it, `zones`, `skew` and `kafka.rackAwareness` read any `zoneLabel` from the nodes themselves:
+
+```bash
+helm template kates oci://ghcr.io/bmscomp/charts/kates -n team \
+  --set rbac.scope=namespace --set rbac.kafkaNamespaceRole=false \
+  --set rbac.nodeReads=true --show-only templates/rbac.yaml | kubectl apply -f -
+```
+
 ### Step 2 — Install the Chart in the Team's Namespace
 
 The team stores the password where the chart looks for it, the key `password` of the Secret `kates-backend` (`kafka.sasl.secretName`), and installs with plain Helm. `rbac.scope=namespace` renders nothing cluster-scoped, `rbac.kafkaNamespaceRole=false` leaves out the Role the team can't create, and `kafka.sasl.username` names the KafkaUser:
@@ -1013,7 +1021,7 @@ When the account can see the operator, which takes listing pods in every namespa
 The namespace scope trades these away:
 
 - Chaos: disruptions and resilience runs inject no fault while the provider is `noop`.
-- `zones`, `skew` and `kafka.rackAwareness` with `kafka.source: cr` read the zone label of each pod's node, and nodes are cluster-scoped. The check takes the zone from the EndpointSlices of Strimzi's headless Service instead, which the Role lets it list. They carry only `topology.kubernetes.io/zone`, so with another `zoneLabel` the three rules are UNKNOWN, and a pod with no address yet counts as in no zone. An admin can grant `list` on nodes with a ClusterRole of its own.
+- `zones`, `skew` and `kafka.rackAwareness` with `kafka.source: cr` read the zone label of each pod's node, and nodes are cluster-scoped. The check takes the zone from the EndpointSlices of Strimzi's headless Service instead, which the Role lets it list. They carry only `topology.kubernetes.io/zone`, and a pod with no address yet counts as in no zone. With another `zoneLabel` that is the Kafka CR's `spec.kafka.rack.topologyKey`, they take it from the racks the brokers report through the Kafka Admin API, since Strimzi copies that node label into each broker's rack; a pod on a node that runs no reported broker, such as a dedicated controller's, is UNKNOWN. With any other `zoneLabel` the three rules are UNKNOWN. An admin can grant `list` on nodes with a ClusterRole of its own.
 - `monitoring.podMonitor` sees only the Kafka namespace's PodMonitors, and is UNKNOWN when none there selects every broker pod.
 - `kates cluster alerts` reports no alert rules, because the Role doesn't grant reading PrometheusRules.
 - INTEGRATION_CDC creates KafkaTopic and KafkaConnector resources, and stays an admin's test.

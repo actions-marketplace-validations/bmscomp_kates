@@ -33,7 +33,7 @@ All configuration is in [values.yaml](values.yaml). Key sections:
 | Parameter | Default | Description |
 |-----------|---------|-------------|
 | `image.repository` | `ghcr.io/bmscomp/kates` | Container image name |
-| `image.tag` | `1.31.0` | Container image tag, pinned in `values.yaml` to match the chart's `appVersion`. Keep it at 1.22.0 or newer: the probes use health endpoints older images lack |
+| `image.tag` | `1.32.0` | Container image tag, pinned in `values.yaml` to match the chart's `appVersion`. Keep it at 1.22.0 or newer: the probes use health endpoints older images lack |
 | `image.pullPolicy` | `IfNotPresent` | Image pull policy |
 | `global.imageRegistry` | `""` | Prepended, with a slash, to every image the chart renders: the API, PostgreSQL, the init container, the jobs, the helm test pods and `chaos.stressImage` |
 | `imagePullSecrets`, `global.imagePullSecrets` | `[]` | Pull secrets, both lists, on every pod the chart renders. An entry is a Secret name (`regcred`) or `{name: regcred}` |
@@ -100,6 +100,7 @@ that namespace (`kates/docs/deployment.md` runs one in `kates`) needs a
 | `rbac.create` | `true` | Create the RBAC objects `rbac.scope` calls for |
 | `rbac.scope` | `cluster` | `cluster`: the backend's ClusterRole/ClusterRoleBinding (Litmus CRDs, Strimzi resources, cluster reads; no Secrets). `namespace`: nothing cluster-scoped; see [Namespace-only install](#namespace-only-install) |
 | `rbac.kafkaNamespaceRole` | `true` | With `rbac.scope=namespace`, render the conformity check's read-only Role in the Kafka namespace |
+| `rbac.nodeReads` | `false` | With `rbac.scope=namespace`, render a ClusterRole and ClusterRoleBinding with `get` and `list` on `nodes`, for a conformity check's zones |
 | `rbac.directChaos` | `false` | Grant the writes the direct Kubernetes chaos backend makes; see [Chaos permissions](#chaos-permissions) |
 | `rbac.cdcSecretNamespaces` | `[]` | Namespaces where the `INTEGRATION_CDC` test may read its database's password; see [Secret access](#secret-access) |
 | `rbac.extraRules` | `[]` | Additional RBAC rules to append to the ClusterRole (`rbac.scope=cluster` only) |
@@ -123,7 +124,15 @@ helm template kates oci://ghcr.io/bmscomp/charts/kates -n team -f team-values.ya
   --set rbac.kafkaNamespaceRole=true --show-only templates/rbac.yaml | kubectl apply -f -
 ```
 
-Without node access, a conformity check takes each Kafka pod's zone for `zones`, `skew` and `kafka.rackAwareness` (source `cr`) from the EndpointSlices of Strimzi's headless Service, which carry only `topology.kubernetes.io/zone`; with another `zoneLabel` those rules are `UNKNOWN`. It finds PodMonitors only in the Kafka namespace.
+Without node access, a conformity check takes each Kafka pod's zone for `zones`, `skew` and `kafka.rackAwareness` (source `cr`) from the EndpointSlices of Strimzi's headless Service, which carry only `topology.kubernetes.io/zone`. With another `zoneLabel` that is the Kafka CR's `spec.kafka.rack.topologyKey`, it takes the zone from the racks the brokers report; with any other, those rules are `UNKNOWN`. It finds PodMonitors only in the Kafka namespace.
+
+`rbac.nodeReads=true` lifts that limit with one cluster-scoped grant, `get` and `list` on `nodes`, in a ClusterRole named `<fullname>-node-reader-<release namespace>`. A team installs with it off, and a cluster admin applies it from the same release name, namespace and values:
+
+```bash
+helm template kates oci://ghcr.io/bmscomp/charts/kates -n team -f team-values.yaml \
+  --set rbac.kafkaNamespaceRole=false --set rbac.nodeReads=true \
+  --show-only templates/rbac.yaml | kubectl apply -f -
+```
 
 ### Secret access
 
