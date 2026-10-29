@@ -202,6 +202,14 @@ public class ScheduleResource {
         return repository
                 .findById(id)
                 .map(schedule -> {
+                    if (request.name != null) {
+                        // POST's @Size and @NotBlank, which a PUT without @Valid skips.
+                        Set<ConstraintViolation<CreateScheduleRequest>> violations =
+                                validator.validateProperty(request, "name");
+                        if (!violations.isEmpty()) {
+                            throw new ConstraintViolationException(violations);
+                        }
+                    }
                     if (request.cronExpression != null) {
                         // POST's @Size and @NotBlank, which a PUT without @Valid skips.
                         Set<ConstraintViolation<CreateScheduleRequest>> violations =
@@ -273,7 +281,8 @@ public class ScheduleResource {
 
     public static class CreateScheduleRequest {
         @jakarta.validation.constraints.NotBlank(message = "name is required")
-        @jakarta.validation.constraints.Size(max = 255)
+        // The name column's width (V2__create_schedules_table.sql).
+        @jakarta.validation.constraints.Size(max = 128)
         public String name;
 
         @jakarta.validation.constraints.NotBlank(message = "cronExpression is required")
