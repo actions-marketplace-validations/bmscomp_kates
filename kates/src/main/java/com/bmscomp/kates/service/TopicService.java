@@ -20,6 +20,7 @@ import org.apache.kafka.clients.admin.TopicDescription;
 import org.apache.kafka.common.Node;
 import org.apache.kafka.common.TopicPartitionInfo;
 import org.apache.kafka.common.config.ConfigResource;
+import org.apache.kafka.common.errors.UnknownTopicOrPartitionException;
 import org.eclipse.microprofile.faulttolerance.Retry;
 import org.eclipse.microprofile.faulttolerance.Timeout;
 import org.jboss.logging.Logger;
@@ -123,6 +124,29 @@ public class TopicService {
             return client.describeTopics(topicNames).allTopicNames().get(TIMEOUT_SECONDS, TimeUnit.SECONDS);
         } catch (Exception e) {
             throw new RuntimeException("Failed to describe topics", e);
+        }
+    }
+
+    /**
+     * describeTopicDetail for a topic createTopic has just made. CreateTopics
+     * returns once the controller has the topic, and a broker can still answer
+     * it unknown until its metadata catches up: main's CI (d120b8cb) got a 500
+     * from POST /api/kafka/topics for a topic it had created 0.1 s before.
+     * Only that answer is retried: any other failure, a broker that does not
+     * answer among them, surfaces at once rather than after 11 timeouts.
+     */
+    @Retry(maxRetries = 10, delay = 200, retryOn = UnknownTopicOrPartitionException.class)
+    @Timeout(35_000)
+    public Map<String, Object> describeCreatedTopic(String topicName) {
+        try {
+            return describeTopicDetail(topicName);
+        } catch (RuntimeException e) {
+            for (Throwable c = e; c != null; c = c.getCause()) {
+                if (c instanceof UnknownTopicOrPartitionException) {
+                    throw new UnknownTopicOrPartitionException("Topic not yet known to the broker: " + topicName, e);
+                }
+            }
+            throw e;
         }
     }
 

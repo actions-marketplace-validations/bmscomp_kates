@@ -679,7 +679,7 @@ The response is 200 whatever the verdict, with one result per declared rule. `ve
 
 A reference the check cannot run is a 400 whose `fieldErrors` name each path, as `spec.brokers.cuont: unknown field`. A reference for another cluster than the one Kates watches, or a cluster without its Kafka resource, is a 409; a body over 256 KiB is a 413; an unreachable Kubernetes API, or one that refuses the Kates API the Kafka resource, is a 503.
 
-The Kates API stores each report it answers with, and its `Location` header names it, as `/api/conformity/checks/1f0c…`. A refused reference stores nothing. If the database fails, the caller still gets its report, without a `Location`, and the Kates API logs an error. Each stored check also leaves an audit row (`RUN`, type `compliance`) whose target is the check's id. Nothing deletes stored checks.
+The Kates API stores each report it answers with, and its `Location` header names it, as `/api/conformity/checks/1f0c…`. A refused reference stores nothing. If the database fails, the caller still gets its report, without a `Location`, and the Kates API logs an error. Each stored check also leaves an audit row (`RUN`, type `compliance`) whose target is the check's id and whose details hold the verdict and two hashes, as `verdict FAIL, report sha256 5d41…, reference sha256 44136f…`. The audit log is a hash chain, so those hashes are what a later reader compares the stored check against ([Proving the Results Were Not Changed](compliance.md#proving-the-results-were-not-changed)). Nothing deletes stored checks.
 
 #### GET /api/conformity/checks
 
@@ -698,7 +698,7 @@ List the stored checks, newest first (scope `read`). `since` (inclusive) and `un
 
 #### GET /api/conformity/checks/{id}
 
-One stored check (scope `read`): the fields the list shows, `referenceSha256`, the SHA-256 of the body the Kates API was sent (the JSON `kates compliance check` made from the file, not the YAML file itself), and `report`, the full report as the check answered it. An unknown id is a 404.
+One stored check (scope `read`): the fields the list shows, `referenceSha256`, the SHA-256 of the body the Kates API was sent (the JSON `kates compliance check` made from the file, not the YAML file itself), `report`, the full report as the check answered it, and `reportSha256`, the SHA-256 of the report as it is stored now, computed when you ask. It equals the `report sha256` in the check's audit row unless the stored report was changed after the check. An unknown id is a 404.
 
 ### Disruption Testing
 
@@ -948,7 +948,7 @@ Start a test run and inject one fault while it runs. The call is long-running: w
 }
 ```
 
-Optional fields: `probes` (steady-state probe definitions) and `maxRecoveryWaitSec` (default 120).
+Optional fields: `probes` (steady-state probe definitions) and `maxRecoveryWaitSec` (default 120). A probe's `intervalSec`, the pause between two rounds of a `Continuous` probe, defaults to 10; under 1 is refused with a `400` that names the probe, as `probes[1].intervalSec`.
 
 The workload has to be running when the fault lands. At 500 records per second the 180,000 records take 360 s, while the fault is triggered after `steadyStateSec` (30 s), lasts `chaosDurationSec` (30 s), and the run then waits up to `maxRecoveryWaitSec` for recovery. Without `throughput` the producer runs unthrottled and can finish before the fault. A run that has ended when `steadyStateSec` is up gets no fault, and the report is `ERROR`; one that ends after that, before the fault goes in, leaves both summaries describing a run the fault never touched. `testRequest` is the body of [POST /api/tests](#post-apitests), so the same fields apply: `throughput` is the rate limit, and LOAD runs one producer and one consumer, so the spec sets no producer count. `disruptionType` picks the fault: on the default `litmus-crd` chaos provider `POD_KILL` runs the LitmusChaos `pod-delete` experiment, and the outcome reports that name, while `experimentName` only names the ChaosEngine. Without `disruptionType`, Litmus runs the experiment that `experimentName` names, and the `kates-chaos` chart installs none called `kafka-pod-kill`. The selector adds `strimzi.io/broker-role=true` because `strimzi.io/component-type=kafka` alone also matches the KRaft controllers, and the random pick could then kill a controller instead of a broker.
 
@@ -1032,7 +1032,7 @@ An unknown `id` gets `404 Not Found`. The `node-maintenance` scenario is listed,
 
 ### Trend Analysis
 
-A trend follows one metric across a test type's `DONE` runs over a number of days, compares each run with a baseline averaged over the most recent of them, and flags regressions; `kates trend` charts the same data. A `FAILED` run is left out, because its numbers stop wherever it failed, and so is a run still in flight.
+A trend follows one metric across a test type's `DONE` runs over a number of days, compares each run with a baseline averaged over the most recent of them, and flags regressions; `kates trend` charts the same data. A run is a regression when it is more than 20% off the baseline in the bad direction: above it for a latency or the error rate, below it for throughput. A `FAILED` run is left out, because its numbers stop wherever it failed, and so is a run still in flight.
 
 #### GET /api/trends
 
