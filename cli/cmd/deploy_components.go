@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"maps"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -110,11 +112,23 @@ func ensureDeployNamespace(ctx context.Context, namespace string, labels map[str
 	}
 	out, err := runExecOutputFn(ctx, "kubectl", "get", "namespace", namespace, "--ignore-not-found", "-o", "json")
 	if err != nil {
+		// Output keeps kubectl's words in the ExitError, not in its message.
+		if exitErr, ok := errors.AsType[*exec.ExitError](err); ok {
+			err = fmt.Errorf("%w: %s", err, strings.TrimSpace(string(exitErr.Stderr)))
+		}
+		if rbacRefused(err, "get") {
+			// An account that may not read namespaces may still have this one:
+			// use it as it is, and let the install say so if it is missing.
+			return nil
+		}
 		return fmt.Errorf("check namespace %s: %w", namespace, err)
 	}
 	if strings.TrimSpace(string(out)) == "" {
 		manifest := deployNamespaceManifest(namespace, labels)
 		if err := runExecStdinFn(ctx, "kubectl", []string{"create", "-f", "-"}, manifest); err != nil {
+			if strings.Contains(err.Error(), "AlreadyExists") || strings.Contains(err.Error(), "already exists") {
+				return nil // made meanwhile by a component installing in parallel
+			}
 			if rbacRefused(err, "create") {
 				return fmt.Errorf("create namespace %s: %w\n\nThis account may not create namespaces. Ask a cluster admin to apply this manifest (kubectl create -f <file>), then run again:\n\n%s", namespace, err, manifest)
 			}
@@ -238,7 +252,9 @@ func selectedDeployNamespaces(dc *deployContext) []string {
 	}
 
 	add(dc.ns.kafka)
-	add(dc.ns.app)
+	if deployWithKates {
+		add(dc.ns.app)
+	}
 	if deployWithMonitoring {
 		add(dc.ns.jaeger)
 	}
@@ -437,15 +453,75 @@ func prometheusOperatorCRDsAvailable(ctx context.Context) bool {
 	return true
 }
 
-func isKafkaClusterReady(ctx context.Context, namespace, name string) bool {
+// kafkaReadiness is what the Kafka CR says about its readiness.
+type kafkaReadiness struct {
+	// ready: Ready=True for the current spec (observedGeneration ==
+	// generation). Right after an apply the CR still carries the Ready of
+	// the spec before it.
+	ready bool
+	// paused: strimzi.io/pause-reconciliation is set, so the operator will
+	// not reconcile the spec deploy applied.
+	paused bool
+	// why is the NotReady condition's reason and message, for a timeout:
+	// Strimzi swaps Ready for NotReady rather than setting it False.
+	why string
+}
+
+const kafkaReadyJSONPath = `jsonpath={.metadata.generation}|{.status.observedGeneration}|{.status.conditions[?(@.type=="Ready")].status}|{.status.conditions[?(@.type=="ReconciliationPaused")].status}|{.status.conditions[?(@.type=="NotReady")].reason}: {.status.conditions[?(@.type=="NotReady")].message}`
+
+func readKafkaReadiness(ctx context.Context, namespace, name string) kafkaReadiness {
 	checkCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
 	out, err := runExecOutputFn(checkCtx,
 		"kubectl", "get", "kafka", name, "-n", namespace,
-		"-o", `jsonpath={.status.conditions[?(@.type=="Ready")].status}`,
+		"-o", kafkaReadyJSONPath,
 	)
-	return err == nil && strings.Contains(string(out), "True")
+	f := strings.SplitN(strings.TrimSpace(string(out)), "|", 5)
+	if err != nil || len(f) < 4 {
+		return kafkaReadiness{}
+	}
+	r := kafkaReadiness{
+		ready:  f[0] != "" && f[0] == f[1] && f[2] == "True",
+		paused: f[3] == "True",
+	}
+	if len(f) == 5 {
+		r.why = strings.Trim(strings.TrimSpace(f[4]), ":")
+	}
+	return r
+}
+
+// isKafkaClusterReady says whether the Kafka CR is Ready for its current spec.
+func isKafkaClusterReady(ctx context.Context, namespace, name string) bool {
+	return readKafkaReadiness(ctx, namespace, name).ready
+}
+
+// waitKafkaReady polls the Kafka CR until it is Ready for its current spec,
+// or deadline. Running pods are not enough: the entity operator's carry the
+// cluster label too, and brokers run before they have joined. A paused
+// Kafka is not waited on: the operator will not reconcile it.
+func waitKafkaReady(ctx context.Context, namespace, name string, deadline time.Time) error {
+	for {
+		r := readKafkaReadiness(ctx, namespace, name)
+		switch {
+		case r.ready:
+			return nil
+		case r.paused:
+			dl.Printf("    ⚠ Kafka %s/%s has reconciliation paused (strimzi.io/pause-reconciliation): the operator applies this deploy's spec once it is unpaused\n", namespace, name)
+			return nil
+		case !deployClock.Now().Before(deadline):
+			why := ""
+			if r.why != "" {
+				why = " (" + r.why + ")"
+			}
+			return fmt.Errorf("timeout waiting for Kafka %s/%s to report Ready for its current spec%s; is its operator watching namespace %s?", namespace, name, why, namespace)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-deployClock.After(silentPollInterval):
+		}
+	}
 }
 
 func kafkaConnectNeedsReconcile(ctx context.Context, namespace, name, expectedBootstrap, expectedKafkaSearch string) (bool, string) {
@@ -629,7 +705,7 @@ func (dc *deployContext) strimziComponent() component {
 				"--set", "crdUpgrade.enabled=false"}
 			opArgs = append(opArgs, versionArgs...)
 			opArgs = append(opArgs, "--timeout", "10m")
-			return runHelmFn(ctx, opArgs...)
+			return runHelmFn(ctx, append(opArgs, dc.policyArgs("strimzi-operator")...)...)
 		},
 		wait: func(ctx context.Context) error {
 			return dc.waitPods(ctx, ns, "name=strimzi-cluster-operator", 5*time.Minute, "Strimzi operator readiness failed")
@@ -725,10 +801,6 @@ func applyCertMgrClusterIssuer(ctx context.Context) error {
 	const caTimeout = 180 * time.Second
 	const caPoll = 3 * time.Second
 	caDeadline := deployClock.Now().Add(caTimeout)
-	certMgrWebhookConfigs := []string{
-		"mutatingwebhookconfiguration",
-		"validatingwebhookconfiguration",
-	}
 	for {
 		injected := 0
 		for _, kind := range certMgrWebhookConfigs {
@@ -817,6 +889,31 @@ func restoreCertMgrWebhookPolicy(ctx context.Context, configs []string) {
 			`[{"op":"replace","path":"/webhooks/0/failurePolicy","value":"Fail"}]`); err != nil {
 			dl.Printf("    ⚠ Could not restore failurePolicy: Fail on %s cert-manager-webhook: %v\n", kind, err)
 		}
+	}
+}
+
+// certMgrWebhookConfigs are the kinds of cert-manager's two webhook configs.
+var certMgrWebhookConfigs = []string{
+	"mutatingwebhookconfiguration",
+	"validatingwebhookconfiguration",
+}
+
+// restoreFailOpenCertMgrWebhook puts back a cert-manager webhook an earlier
+// run left at failurePolicy: Ignore. The deferred restore above does not run
+// when kates itself is killed, and a later deploy skips the installed
+// cert-manager, so the webhook used to stay fail-open for good.
+func restoreFailOpenCertMgrWebhook(ctx context.Context) {
+	var open []string
+	for _, kind := range certMgrWebhookConfigs {
+		out, err := runExecOutputFn(ctx, "kubectl", "get", kind, "cert-manager-webhook",
+			"-o", "jsonpath={.webhooks[0].failurePolicy}")
+		if err == nil && strings.TrimSpace(string(out)) == "Ignore" {
+			open = append(open, kind)
+		}
+	}
+	if len(open) > 0 {
+		dl.Println("    - An earlier deploy left the cert-manager webhook at failurePolicy: Ignore; restoring Fail")
+		restoreCertMgrWebhookPolicy(ctx, open)
 	}
 }
 
@@ -983,7 +1080,7 @@ func (dc *deployContext) monitoringComponent() component {
 				dl.Println("    - Reusing existing Prometheus Operator CRDs...")
 				monitoringArgs = append(monitoringArgs, "--set", "kube-prometheus-stack.crds.enabled=false")
 			}
-			return runHelmFn(ctx, monitoringArgs...)
+			return runHelmFn(ctx, append(monitoringArgs, dc.policyArgs("monitoring")...)...)
 		},
 		wait: func(ctx context.Context) error {
 			if err := dc.waitPods(ctx, jaegerNS, "release=monitoring", 10*time.Minute, ""); err != nil {
@@ -1025,9 +1122,9 @@ func (dc *deployContext) postgresComponent() component {
 			// This repository's chart, on the official postgres image: its
 			// defaults are the demo's (debezium/debezium, database orders,
 			// wal_level=logical), and it keeps bitnami/postgresql's names.
-			return runHelmFn(ctx, "upgrade", "--install", "postgresql", chartRootPath("charts/cdc-postgresql"),
+			return runHelmFn(ctx, append([]string{"upgrade", "--install", "postgresql", chartRootPath("charts/cdc-postgresql"),
 				"-n", dbNS, "--create-namespace",
-				"--timeout", "5m")
+				"--timeout", "5m"}, dc.policyArgs("cdc-postgresql")...)...)
 		},
 		wait: func(ctx context.Context) error {
 			if err := waitComponentReadySilent(ctx, deployDbNS, "app.kubernetes.io/instance=postgresql", 5*time.Minute); err != nil {
@@ -1122,10 +1219,14 @@ func (dc *deployContext) kafkaComponent() component {
 			// (Values files are already appended above so these overrides take precedence)
 			kafkaArgs = append(kafkaArgs, dc.scrapeArgs("charts/kafka-cluster")...)
 
-			return runHelmFn(ctx, kafkaArgs...)
+			return runHelmFn(ctx, append(kafkaArgs, dc.policyArgs("kafka-cluster")...)...)
 		},
 		wait: func(ctx context.Context) error {
+			deadline := deployClock.Now().Add(15 * time.Minute)
 			if err := dc.waitPods(ctx, kafkaNS, dc.primary.ReadySelector(), 15*time.Minute, ""); err != nil {
+				return fmt.Errorf("kafka readiness failed: %w", err)
+			}
+			if err := waitKafkaReady(ctx, kafkaNS, dc.primary.Name, deadline); err != nil {
 				return fmt.Errorf("kafka readiness failed: %w", err)
 			}
 			return nil
@@ -1345,7 +1446,7 @@ func (dc *deployContext) kafkaConnectHelmArgs(bootstrap, kafkaSvcDomain, connect
 	// CRDs its PodMonitor needs exist; without --with-monitoring the
 	// chart's own API check keeps a bare cluster installable.
 	connectArgs = append(connectArgs, dc.scrapeArgs("charts/connect-cluster")...)
-	return connectArgs
+	return append(connectArgs, dc.policyArgs("connect-cluster")...)
 }
 
 // debeziumConnectorYAML is the Debezium source connector: its namespace, the
@@ -1483,7 +1584,8 @@ func (dc *deployContext) apicurioComponent() component {
 			return fmt.Sprintf("\n📦 Deploying Apicurio Schema Registry (Namespace: %s)...", kafkaNS)
 		},
 		install: func(ctx context.Context) error {
-			return runHelmFn(ctx, "upgrade", "--install", "apicurio", chartRootPath("charts/apicurio-registry"), "-n", kafkaNS, "--create-namespace", "--timeout", "5m")
+			return runHelmFn(ctx, append([]string{"upgrade", "--install", "apicurio", chartRootPath("charts/apicurio-registry"), "-n", kafkaNS, "--create-namespace", "--timeout", "5m"},
+				dc.policyArgs("apicurio-registry")...)...)
 		},
 	}
 }
@@ -1520,6 +1622,7 @@ func (dc *deployContext) katesComponent() component {
 	return component{
 		id: "kates", name: "Kates Backend", namespace: appNS,
 		deps: []string{"kafka-users", "postgres", "monitoring"}, timeout: 8 * time.Minute,
+		enabled: func() bool { return deployWithKates },
 		// The KafkaUser was already waited on (kafka-users) — just read the Secret.
 		secrets: []secretCopy{{name: "kates-backend"}},
 		banner: func(ctx context.Context) string {
@@ -1576,6 +1679,7 @@ func (dc *deployContext) katesComponent() component {
 					katesArgs = append(katesArgs, "--set", "rbac.kafkaNamespaceRole=false")
 				}
 			}
+			katesArgs = append(katesArgs, dc.policyArgs("kates")...)
 			katesArgs = append(katesArgs, "--timeout", "8m")
 
 			dl.Println("    - Waiting for Kates backend pods to become ready (this may take 2-3 minutes)...")
@@ -1619,7 +1723,7 @@ func (dc *deployContext) kafkaUIComponent() component {
 			if overlay := dc.chartOverlay(chartRootPath("charts/kafka-ui")); dc.fileExists(overlay) {
 				helmArgs = append(helmArgs, "-f", overlay)
 			}
-			return runHelmFn(ctx, helmArgs...)
+			return runHelmFn(ctx, append(helmArgs, dc.policyArgs("kafka-ui")...)...)
 		},
 	}
 }
@@ -1675,6 +1779,7 @@ func (dc *deployContext) mirrorMaker2Component() component {
 				)
 			}
 			helmArgs = append(helmArgs, dc.scrapeArgs("charts/mirror-maker2")...)
+			helmArgs = append(helmArgs, dc.policyArgs("mirror-maker2")...)
 			helmArgs = append(helmArgs, "--timeout", "10m")
 			return runHelmFn(ctx, helmArgs...)
 		},
@@ -1710,7 +1815,7 @@ func (dc *deployContext) chaosComponent() component {
 				"--set", "rbac.kafkaNamespace=" + kafkaNS}
 			chaosArgs = append(chaosArgs, dc.scrapeArgs("charts/kates-chaos")...)
 			chaosArgs = append(chaosArgs, "--timeout", "5m")
-			return runHelmFn(ctx, chaosArgs...)
+			return runHelmFn(ctx, append(chaosArgs, dc.policyArgs("kates-chaos")...)...)
 		},
 		wait: func(ctx context.Context) error {
 			return dc.waitPods(ctx, chaosNS, "app.kubernetes.io/instance=chaos", 5*time.Minute, "")

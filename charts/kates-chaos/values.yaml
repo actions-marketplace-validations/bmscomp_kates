@@ -48,7 +48,7 @@ images:
   # tester — kates-tester, for GameDay and the Helm tests, whose scripts need
   # the shell the kubectl image lacks. Runs as uid 1000. Pinned to the kates
   # appVersion, like every chart's test image (scripts/check-versions.sh).
-  tester: "ghcr.io/bmscomp/kates-tester:1.34.0"
+  tester: "ghcr.io/bmscomp/kates-tester:1.35.0"
   # go-runner — default runtime for ChaosExperiment definitions
   goRunner:
     repository: litmuschaos/go-runner
@@ -220,10 +220,11 @@ engines: {}
 
 # ── Network policy ───────────────────────────────────────────────────────────
 # Default-deny is NOT imposed; this policy scopes what the chaos infra pods in
-# the release namespace may talk to. Egress must include the Kubernetes API
-# server (the operator needs it) and DNS.
+# the release namespace may talk to, and is what lets them run where the
+# namespace denies all traffic by default. Egress must include the Kubernetes
+# API server (the operator needs it) and DNS.
 networkPolicy:
-  enabled: false
+  enabled: true
   # -- Egress to the Kubernetes API server (required by the chaos operator)
   apiServer:
     enabled: true
