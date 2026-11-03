@@ -301,6 +301,16 @@ jobs:
             'declares neither source.clusterName nor source.bootstrapServers' \
             -f /tmp/unset-source.yaml
 
+          cat > /tmp/no-connectors.yaml <<'YAML'
+          mirrors:
+            - source: { alias: bare, clusterName: other, namespace: kafka, kafkaVersion: "3.9.1" }
+          YAML
+          # A mirrors: override replaces the default list, connector blocks
+          # included, and Strimzi reports the CR Ready with zero connectors.
+          fail_expected "a mirror with no connectors" \
+            'has neither sourceConnector nor checkpointConnector' \
+            -f /tmp/no-connectors.yaml
+
           cat > /tmp/identity-same-pattern.yaml <<'YAML'
           replicationPolicy: { mode: identity }
           mirrors:
@@ -975,6 +985,10 @@ jobs:
               # 0.8.0 moves every helper pod to the kates-tester pin the
               # connect-cluster tests already run on (plan, M4).
               "image = ghcr.io/bmscomp/kates-tester:1.21.0",
+              # 0.11.23 drops the Kafka egress ipBlock 0.0.0.0/0, which matches
+              # no IPv6 address: the rule now admits the Kafka ports at any
+              # address. A wider rule, not a narrower one.
+              "NetworkPolicy/mm2-mirror-maker2.spec.egress[].to[].ipBlock.cidr = 0.0.0.0/0",
           )
 
 
