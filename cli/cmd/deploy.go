@@ -194,6 +194,12 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 	}
 	// Deploy makes each namespace itself, or uses the one already there.
 	defer dropCreateNamespace()()
+
+	executor := defaultExecutor
+	report, err := adminlessReportFirst(cmd, executor, target, namespaceLabels)
+	if err != nil {
+		return err
+	}
 	if err := configureDeploySelection(cmd, wizard); err != nil {
 		return err
 	}
@@ -202,14 +208,15 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 	// go in before any pod, the pre-flight probes' included. A dry run loads
 	// nothing.
 	if !deployDryRun {
-		if err := loadBundleImages(context.Background(), target, quickDetectKind()); err != nil {
+		kubeContext, isKind := bundleKindTarget(target, report)
+		if err := loadBundleImages(context.Background(), kubeContext, isKind); err != nil {
 			return err
 		}
 	}
 
-	executor := defaultExecutor
-	report, err := introspectDeployCluster(executor, target, namespaceLabels)
-	if err != nil {
+	if report != nil {
+		sizeAdminless(context.Background(), report, cmd.Flags().Changed("ha"))
+	} else if report, err = introspectDeployCluster(executor, target, namespaceLabels); err != nil {
 		return err
 	}
 
@@ -222,16 +229,16 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	if err := writeDeployValues(executor, valuesFile, report, primary.Name); err != nil {
+	// Resolve namespaces before building entries
+	ns := resolveNamespaces()
+
+	if err := writeDeployValues(commandContext(cmd), executor, valuesFile, report, primary.Name, ns); err != nil {
 		return err
 	}
 	policyValues, err := writeDeployPolicyValues(policies, valuesFile)
 	if err != nil {
 		return err
 	}
-
-	// Resolve namespaces before building entries
-	ns := resolveNamespaces()
 
 	// ── Build shared component registry (single source of truth) ──
 	sharedEntries := buildSharedEntries(ns)
@@ -476,13 +483,40 @@ func configureDeploySelection(cmd *cobra.Command, wizard bool) error {
 	return nil
 }
 
+// adminlessReportFirst reads the report before the wizard, admin-less only: it
+// only reads, the wizard's HA question starts from the size this cluster takes,
+// and it tells kind where quickDetectKind may not read.
+func adminlessReportFirst(cmd *cobra.Command, executor detect.CommandExecutor, target string, namespaceLabels map[string]string) (*detect.DetectReport, error) {
+	if !deployAdminless {
+		return nil, nil
+	}
+	report, err := introspectDeployCluster(executor, target, namespaceLabels)
+	if err != nil {
+		return nil, err
+	}
+	defaultAdminlessSize(report, cmd.Flags().Changed("ha"))
+	return report, nil
+}
+
+// bundleKindTarget says which context the bundle's images load through and
+// whether it is kind: the admin-less report's when it told kind, since that
+// account may not read quickDetectKind's DaemonSet, and its context carries
+// kind's own name, where a team's context may not.
+func bundleKindTarget(target string, report *detect.DetectReport) (string, bool) {
+	if report != nil && isKindReport(report) {
+		return report.Context, true
+	}
+	return target, quickDetectKind()
+}
+
 // introspectDeployCluster runs the pre-flight and the introspection that
 // sizes the values file. Admin-less it runs neither.
 func introspectDeployCluster(executor detect.CommandExecutor, target string, namespaceLabels map[string]string) (*detect.DetectReport, error) {
 	if deployAdminless {
 		// Introspection reads nodes and kube-system, and its probes create
 		// namespaces and pods: nothing a namespace account may do. The charts'
-		// own defaults stand in for what it would have sized.
+		// own defaults stand in for what it would have sized, or the admin-less
+		// sizing shrinks them.
 		// shortcut: assumes the cluster.local DNS domain; read it from a pod in the namespace if a cluster needs another.
 		report := &detect.DetectReport{Context: target, Provider: "unknown"}
 		report.Network.ClusterDomain = "cluster.local"
@@ -491,6 +525,7 @@ func introspectDeployCluster(executor detect.CommandExecutor, target string, nam
 		collector := detect.NewCollector(executor)
 		collector.KubeContext = target
 		_ = collector.CollectNodes(context.Background(), report)
+		detectAdminlessPlatform(context.Background(), report)
 		return report, nil
 	}
 	PrintPhaseHeader(nextDeployPhase(), "Running Cluster Introspection (Pre-flight)")
@@ -545,9 +580,35 @@ func resolveDeployVersions() (*versionPlan, primaryCluster, error) {
 	return vp, primaryCluster{Name: deployKafkaName, Namespace: resolveNamespaces().kafka, Version: vp.kafka}, nil
 }
 
+// Each Connect or MirrorMaker 2 release runs this many workers by default,
+// each requesting this much: the charts' replicas and resources.requests.
+const (
+	workerReplicas = 3
+	workerCPU      = 1000 // millicores
+	workerMem      = 2    // GiB
+)
+
+// planDeployWorkers adds the Connect and MirrorMaker 2 workers this deploy
+// will install to the report, so Kafka is sized to leave room for them. A
+// release already there is in the report's running pods.
+func planDeployWorkers(ctx context.Context, report *detect.DetectReport, ns resolvedNamespaces) {
+	for _, w := range []struct {
+		enabled            bool
+		release, namespace string
+	}{
+		{deployWithKafkaConnect, "connect-cluster", ns.connect},
+		{deployWithMirrorMaker2, "mm2", ns.mm2},
+	} {
+		if w.enabled && !isHelmReleaseDeployedFn(ctx, w.release, w.namespace) {
+			report.Workload.PlannedCPURequests += workerReplicas * workerCPU
+			report.Workload.PlannedMemRequests += workerReplicas * workerMem
+		}
+	}
+}
+
 // writeDeployValues writes the values file the introspection sized.
 // Admin-less, nothing was introspected, so the file stays empty.
-func writeDeployValues(executor detect.CommandExecutor, valuesFile string, report *detect.DetectReport, kafkaName string) (err error) {
+func writeDeployValues(ctx context.Context, executor detect.CommandExecutor, valuesFile string, report *detect.DetectReport, kafkaName string, ns resolvedNamespaces) (err error) {
 	if err := os.MkdirAll(filepath.Dir(valuesFile), 0o755); err != nil {
 		return fmt.Errorf("failed to create values file: %v", err)
 	}
@@ -568,6 +629,7 @@ func writeDeployValues(executor detect.CommandExecutor, valuesFile string, repor
 	analyzer := detect.NewAnalyzer(executor)
 	analyzer.Analyze(report, detect.ParsedReqs{})
 
+	planDeployWorkers(ctx, report, ns)
 	PrintPhaseItem("Generating " + valuesFile + "...")
 	if err := detect.RenderValuesWithReserve(report, kafkaName, 0.30, f); err != nil {
 		return fmt.Errorf("failed to write values file: %v", err)
