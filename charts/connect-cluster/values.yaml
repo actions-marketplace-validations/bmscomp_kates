@@ -55,7 +55,7 @@ imagePullPolicy: ""
 
 # -- Images the chart's own pods use
 testImages:
-  kubectl: "ghcr.io/bmscomp/kates-tester:1.38.0"
+  kubectl: "ghcr.io/bmscomp/kates-tester:1.39.0"
 
 # ── Workers ─────────────────────────────────────────────────────────────────
 # -- Number of worker replicas (seeded from autoscaling.minReplicas under an HPA)
@@ -519,6 +519,11 @@ secretSync:
 # The chart grants `get` on exactly the Secrets the connectors (and test
 # connectors) reference, one Role per namespace.
 rbac:
+  # -- cluster (empty: global.rbacScope, then cluster) or namespace. In
+  # namespace scope the release leaves nothing cluster-scoped behind, so a
+  # namespace admin installs it: no rack awareness (for
+  # it Strimzi binds the workers to a ClusterRole) and no PriorityClass.
+  scope: ""
   # -- Secrets referenced from outside this chart (connectors applied by hand
   # or by another tool): `name` (this namespace) or `namespace/name`
   secretNames: []

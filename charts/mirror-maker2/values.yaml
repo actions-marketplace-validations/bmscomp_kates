@@ -35,7 +35,7 @@ global:
 
 # -- Images used by the Helm test pods
 testImages:
-  kubectl: "ghcr.io/bmscomp/kates-tester:1.38.0"
+  kubectl: "ghcr.io/bmscomp/kates-tester:1.39.0"
 
 # -- Number of MM2 (Connect) worker replicas
 replicas: 3
@@ -378,6 +378,13 @@ topologySpreadConstraints:
 podAntiAffinity:
   enabled: true
   topologyKey: kubernetes.io/hostname
+
+rbac:
+  # -- cluster (empty: global.rbacScope, then cluster) or namespace. In
+  # namespace scope the release leaves nothing cluster-scoped behind, so a
+  # namespace admin installs it: no rack awareness (for
+  # it Strimzi binds the workers to a ClusterRole).
+  scope: ""
 
 rack:
   enabled: false

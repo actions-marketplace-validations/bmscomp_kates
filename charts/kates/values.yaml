@@ -7,8 +7,6 @@ global:
   # -- Pull secrets added to imagePullSecrets on every pod the chart renders,
   # each a Secret name or {name: ...}: [regcred] or [{name: regcred}]
   imagePullSecrets: []
-  # -- Kubernetes cluster DNS domain
-  clusterDomain: "cluster.local"
 
 # -- Enable production guard rails: template rendering fails if insecure
 # chart defaults (e.g. the default database password) would reach the
@@ -29,7 +27,7 @@ image:
   repository: ghcr.io/bmscomp/kates
   # -- Image tag. Must be the release that carries the non-blocking health
   # endpoints the probe defaults below depend on (>= 1.22.0).
-  tag: "1.38.0"
+  tag: "1.39.0"
   # -- Image pull policy
   pullPolicy: IfNotPresent
 
@@ -64,7 +62,8 @@ rbac:
   # -- cluster: a ClusterRole and ClusterRoleBinding for every feature, chaos
   # included. namespace: nothing cluster-scoped; tests and conformity checks
   # run, chaos is off (KATES_CHAOS_PROVIDER=noop unless chaos.provider is set).
-  scope: cluster
+  # Empty: global.rbacScope (an umbrella's one switch), then cluster.
+  scope: ""
   # -- With scope namespace: render the read-only Role and RoleBinding a
   # conformity check needs in the Kafka namespace (networkPolicy.kafka.namespace,
   # which the check then reads). An installer with only edit sets it false, and
