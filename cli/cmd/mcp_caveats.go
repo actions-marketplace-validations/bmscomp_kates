@@ -76,7 +76,7 @@ var mcpCaveatsCore = []mcpCaveat{
 		Short: "A LOAD run is one producer and one consumer whatever numProducers says; only STRESS runs parallel producers.",
 		Text: "A LOAD run is one producer and one consumer, whatever numProducers and numConsumers say, " +
 			"so it cannot show how the cluster behaves under parallel clients. STRESS starts one producer per numProducers.",
-		Refs: []string{mcpAnchoredRef(mcpJava+"engine/TestOrchestrator.java:1677-1686", "case LOAD ->", "case STRESS ->")},
+		Refs: []string{mcpAnchoredRef(mcpJava+"engine/TestOrchestrator.java:1687-1696", "case LOAD ->", "case STRESS ->")},
 	},
 	{
 		ID:    mcpCaveatReaperDeadline,
@@ -99,7 +99,7 @@ var mcpCaveatsCore = []mcpCaveat{
 			"kates/src/main/resources/application.properties:336-350",
 			mcpAnchoredRef(mcpJava+"engine/TestTimeoutReaper.java:49-51,67-76,161-164,192-205",
 				"TestResult.TaskStatus.STOPPING", "kates.engine.reaper-grace-ms", "\"-submission\"", "\"Timeout: still \""),
-			mcpJava + "engine/TestOrchestrator.java:132-163,197-200,366,1142-1205,1271-1280,1335-1367",
+			mcpJava + "engine/TestOrchestrator.java:132-163,197-200,366,1142-1206,1272-1281,1336-1368",
 			mcpJava + "persistence/EntityMapper.java:161-170",
 			"kates/src/main/resources/db/migration/V24__run_planned_duration.sql:1-13",
 			mcpJava + "domain/TestRun.java:520-523",
@@ -126,7 +126,7 @@ var mcpCaveatsCore = []mcpCaveat{
 			mcpAnchoredRef(mcpJava+"engine/TestOrchestrator.java:174,189-191,236",
 				"applyTypeDefaults(type, request.getSpec())", ".withRequestedSpec(", "buildTasks(type, spec, run.getId())"),
 			mcpAnchoredRef(mcpJava+"engine/TestOrchestrator.java:1062-1108", "TestSpec applyTypeDefaults(", "return merged;"),
-			mcpAnchoredRef(mcpJava+"engine/TestOrchestrator.java:1656-1660,1751-1755",
+			mcpAnchoredRef(mcpJava+"engine/TestOrchestrator.java:1666-1670,1761-1765",
 				"Only when asked", `"-integrity-0-group")`),
 			mcpAnchoredRef(mcpJava+"engine/NativeKafkaBackend.java:792", `task.getConsumerGroup() + "-integrity"`),
 			mcpAnchoredRef(mcpJava+"persistence/EntityMapper.java:56,85-86,146-148",
@@ -145,14 +145,17 @@ var mcpCaveatsCore = []mcpCaveat{
 	},
 	{
 		ID:    mcpCaveatCVEFixedList,
-		Short: "The CVE check never learns the Kafka version, so every CVE on its fixed list reads PATCHED.",
-		Text: "The CVE check compares against a fixed list of seven Apache Kafka CVEs, the newest from 2024. It never " +
-			"learns the Kafka version: it reads kafkaVersion from the cluster description, which does not carry one, " +
-			"so the version is \"unknown\", the comparison fails, and every CVE is reported PATCHED with grade PASS.",
+		Short: "The CVE check compares a fixed list; without a Kafka version an older Kates API calls every CVE PATCHED.",
+		Text: "The CVE check compares against a fixed list of seven Apache Kafka CVEs, the newest from 2024. A current " +
+			"Kates API reads the Kafka version from the cluster's Strimzi Kafka resource (status.kafkaVersion, else " +
+			"spec.kafka.version); when it cannot, it compares nothing, lists every CVE under notCompared and grades " +
+			"FAIL. An older one read the version from the cluster description, which does not carry one, so the " +
+			"version was \"unknown\", the comparison failed, and every CVE was reported PATCHED with grade PASS.",
 		Refs: []string{
-			mcpAnchoredRef(mcpJava+"service/SecurityService.java:1387-1478", "public Map<String, Object> cveCheck()"),
-			mcpAnchoredRef(mcpJava+"service/SecurityService.java:1576-1590", "private int compareVersions(String v1, String v2)"),
-			mcpJava + "service/ClusterHealthService.java:72-93",
+			mcpAnchoredRef(mcpJava+"service/SecurityService.java:1390-1496", "public Map<String, Object> cveCheck()"),
+			mcpAnchoredRef(mcpJava+"service/SecurityService.java:1594-1608", "private int compareVersions(String v1, String v2)"),
+			mcpAnchoredRef(mcpJava+"service/ClusterTopologyService.java:371-383",
+				"public java.util.Optional<String> kafkaVersion()", `status.get("kafkaVersion")`),
 		},
 	},
 	{
@@ -163,9 +166,9 @@ var mcpCaveatsCore = []mcpCaveat{
 			"audits that compliance, baseline, drift and gate run internally do not (an older backend appended those " +
 			"too, so there it mostly reflects API traffic).",
 		Refs: []string{
-			mcpJava + "service/SecurityService.java:42,58-69",
-			mcpAnchoredRef(mcpJava+"service/SecurityService.java:793,856,918,983", "= runAudit();"),
-			mcpAnchoredRef(mcpJava+"service/SecurityService.java:1653-1693", "private void recordSnapshot("),
+			mcpJava + "service/SecurityService.java:42,61-72",
+			mcpAnchoredRef(mcpJava+"service/SecurityService.java:796,859,921,986", "= runAudit();"),
+			mcpAnchoredRef(mcpJava+"service/SecurityService.java:1671-1711", "private void recordSnapshot("),
 		},
 	},
 	{
@@ -174,7 +177,7 @@ var mcpCaveatsCore = []mcpCaveat{
 		Text: "A TUNE_* run executes one produce task with the spec's single configuration: it measures one setting " +
 			"and compares none.",
 		Refs: []string{
-			mcpAnchoredRef(mcpJava+"engine/TestOrchestrator.java:1762-1763", "case TUNE_REPLICATION,", "-tune-0"),
+			mcpAnchoredRef(mcpJava+"engine/TestOrchestrator.java:1772-1773", "case TUNE_REPLICATION,", "-tune-0"),
 			mcpJava + "trogdor/SpecFactory.java:38-39",
 		},
 	},
