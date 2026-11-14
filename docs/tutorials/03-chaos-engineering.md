@@ -24,8 +24,8 @@ make chaos-status
 ```
 
 The experiments the chart installs are `pod-delete`, `pod-cpu-hog`,
-`pod-memory-hog`, `pod-network-partition`, `pod-io-stress`, `pod-dns-error`
-(all namespaced) and `node-drain` (cluster-scoped).
+`pod-memory-hog`, `pod-network-partition`, `pod-io-stress`, `pod-dns-error`,
+`disk-fill`, `pod-network-latency` (all namespaced) and `node-drain` (cluster-scoped).
 
 Running one means creating a `ChaosEngine`. Declaratively, that is an entry
 under the chart's `engines:` map:
@@ -410,7 +410,7 @@ kates disruption run --config full-suite.json
 kates disruption status <id>
 ```
 
-`kates disruption watch <id>` is meant to stream the run's progress, but the backend emits its events under the plan's name rather than the disruption ID, so for now it receives nothing; `kates disruption status <id>` shows where the run stands.
+`kates disruption watch <id>` streams the run's progress as it happens, from the moment it connects; `kates disruption status <id>` shows where the run stands, finished steps included.
 
 ## What's Next?
 

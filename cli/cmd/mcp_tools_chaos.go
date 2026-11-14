@@ -147,7 +147,7 @@ var mcpCaveatsChaos = []mcpCaveat{
 			mcpAnchoredRef(mcpJava+"disruption/DisruptionSafetyGuard.java:298-301,874-943",
 				"boolean canExecute = checkRbacPermissions(spec);", `"Insufficient RBAC permissions for "`,
 				"boolean checkRbacPermissions(FaultSpec spec)", `"RBAC check failed, assuming permitted"`),
-			mcpAnchoredRef(mcpJava+"chaos/LitmusChaosProvider.java:41-59,86-88,270",
+			mcpAnchoredRef(mcpJava+"chaos/LitmusChaosProvider.java:42-60,87-89,270",
 				"ON_KUBERNETES_API = EnumSet.of(", "DisruptionType.POD_DELETE,", "DisruptionType.NETWORK_PARTITION);",
 				"return kubernetes.triggerFault(spec, onInject);", `engineSpec.chaosServiceAccount = "litmus-admin";`),
 			mcpAnchoredRef("kates/src/main/resources/application.properties:274-275",
@@ -226,8 +226,8 @@ var mcpCaveatsChaos = []mcpCaveat{
 				"if (selected != null && selected.isAvailable())", "new NoOpChaosProvider()", "matches no chaos provider"),
 			mcpJava + "chaos/NoOpChaosProvider.java:27-32",
 			mcpJava + "chaos/ChaosOutcome.java:77-81",
-			mcpJava + "disruption/DisruptionOrchestrator.java:155-158,219",
-			mcpAnchoredRef(mcpJava+"disruption/DisruptionOrchestrator.java:345-349",
+			mcpJava + "disruption/DisruptionOrchestrator.java:157-160,221",
+			mcpAnchoredRef(mcpJava+"disruption/DisruptionOrchestrator.java:347-351",
 				"boolean injected = disruptionStart != null;", "The fault never went in"),
 			mcpJava + "disruption/DisruptionImpactScorer.java:72-77",
 		},
@@ -242,7 +242,7 @@ var mcpCaveatsChaos = []mcpCaveat{
 			"scores as degradation. Without Prometheus both are 0. Judge latency and throughput from the summary " +
 			"and the steps' impactDeltas instead.",
 		Refs: []string{
-			mcpJava + "disruption/DisruptionOrchestrator.java:182-187,198-199",
+			mcpJava + "disruption/DisruptionOrchestrator.java:184-189,200-201",
 			mcpJava + "disruption/PrometheusMetricsCapture.java:152-171",
 			mcpJava + "disruption/DisruptionImpactScorer.java:92-130",
 		},
@@ -264,7 +264,7 @@ var mcpCaveatsChaos = []mcpCaveat{
 			"measured them for a step whose fault never went in as well; a report does not say which of the two counted " +
 			"its times.",
 		Refs: []string{
-			mcpAnchoredRef(mcpJava+"disruption/DisruptionOrchestrator.java:300,311-313,345-354,391-397,501-507",
+			mcpAnchoredRef(mcpJava+"disruption/DisruptionOrchestrator.java:302,313-315,347-356,393-399,503-509",
 				"new RecoveryClocks(session, isrTracker, lagTracker)", ".triggerFault(spec, clocks::start)",
 				"boolean injected = disruptionStart != null;", "if (step.requireRecovery() && injected)",
 				"Duration strimziRecovery = injected", "injected && isrTracker != null ? isrTracker.stop() : null",
@@ -275,7 +275,7 @@ var mcpCaveatsChaos = []mcpCaveat{
 			mcpAnchoredRef(mcpJava+"disruption/KafkaIntelligenceService.java:125-127,198-217,241-246,310-324",
 				"public void markDisruptionStart(Instant at)", "private Duration computeTimeToFullIsr()",
 				"this.baselineLag = timeline.getLast().totalLag();", "private Duration computeTimeToLagRecovery(long baseLag)"),
-			mcpAnchoredRef(mcpJava+"chaos/LitmusChaosProvider.java:86-98,107-126",
+			mcpAnchoredRef(mcpJava+"chaos/LitmusChaosProvider.java:87-99,108-127",
 				"return kubernetes.triggerFault(spec, onInject);",
 				"CompletableFuture.delayedExecutor(spec.delayBeforeSec(), TimeUnit.SECONDS, executor.get());",
 				"long startNanos = System.nanoTime();", "buildChaosEngine(spec, engineName, experimentName)",
@@ -299,7 +299,7 @@ var mcpCaveatsChaos = []mcpCaveat{
 		Refs: []string{
 			mcpJava + "disruption/KafkaIntelligenceService.java:129-154,165-168",
 			mcpJava + "disruption/DisruptionImpactScorer.java:42-45,132-157",
-			mcpAnchoredRef(mcpJava+"disruption/DisruptionOrchestrator.java:264-267,396",
+			mcpAnchoredRef(mcpJava+"disruption/DisruptionOrchestrator.java:266-269,398",
 				"intelligence.startIsrTracking(", "isrTracker.stop()"),
 		},
 	},
@@ -316,8 +316,8 @@ var mcpCaveatsChaos = []mcpCaveat{
 			mcpJava + "disruption/DisruptionOrphanReconciler.java:54-55,63-70,86-93,171-222",
 			mcpJava + "disruption/DisruptionReportRepository.java:35-60,93-102",
 			mcpJava + "disruption/DisruptionPersistence.java:26-37",
-			mcpJava + "disruption/DisruptionLauncher.java:95-102,110-123",
-			mcpJava + "disruption/DisruptionResource.java:146-152,164-171",
+			mcpJava + "disruption/DisruptionLauncher.java:114-121,129-144",
+			mcpJava + "disruption/DisruptionResource.java:148-154,166-173",
 		},
 	},
 }

@@ -644,7 +644,7 @@ Pod kills are undone by the StrimziPodSets within seconds, so no Kates fault kee
 | T9 | REST INTEGRITY started beforehand | Stop q etcd members | Yes (`docker pause`) |
 | T10 | A `POD_KILL` plan with `targetPod` | Isolate the active controller; power off a broker node | Partly |
 
-Kates can add latency to Kafka pods through Litmus (`NETWORK_LATENCY` runs `pod-network-latency`; Kates has no packet-loss or bandwidth type), but only after you add `pod-network-latency` to the `kates-chaos` chart's `experiments.definitions` (the list replaces the default, so re-list its seven entries: `pod-delete`, `pod-cpu-hog`, `pod-memory-hog`, `pod-network-partition`, `pod-io-stress`, `pod-dns-error` and `node-drain`; see "ChaosExperiment Definitions" in [Kates Chaos Chart — Deployment Guide](../kates-chaos-chart.md#chaosexperiment-definitions)), add a Kyverno exception for the `restrict-host-namespaces` rule the `kafka-cluster` chart enforces in production, and run a third Kates on `litmus-crd`. Even then it shapes only the targeted Kafka pods, one direction per step: etcd, the clients and Kates see no change, so it understates both the client-visible cost and the etcd risk. Use node-level shaping for T4.
+Kates can add latency to Kafka pods through Litmus (`NETWORK_LATENCY` runs `pod-network-latency`; Kates has no packet-loss or bandwidth type), but only after you add a Kyverno exception for the `restrict-host-namespaces` rule the `kafka-cluster` chart enforces in production, and run a third Kates on `litmus-crd`. Even then it shapes only the targeted Kafka pods, one direction per step: etcd, the clients and Kates see no change, so it understates both the client-visible cost and the etcd risk. Use node-level shaping for T4.
 
 ### Harness Limits on Main
 
@@ -707,7 +707,7 @@ Each test lists what to inject, the workload, the expected result per architectu
 1. S1: one random broker (`strimzi.io/cluster=krafter,strimzi.io/broker-role=true`, `targetAll: false`, `targetBrokerId: -1`, `maxAffectedBrokers: 1`).
 2. S2: one random controller (`strimzi.io/cluster=krafter,strimzi.io/controller-role=true`, same settings).
 3. S3, S4, S5: every Kafka pod of one room, as three separate plans: `site=a` for AZ1 (A4 and A5 pods carry `zone=az1a` or `zone=az1b`), `zone=az2`, `zone=az3`.
-4. A site-B transient: every Kafka pod with `site=b`, `maxAffectedBrokers` = the site-B pod count. In A6 that is every pod of KB, which the safety guard rejects as a plan and as a resilience run: run it outside Kates, with `kubectl delete pod -l` as `make gameday` does, while a REST INTEGRITY run writes (no `rpoMs`), and check its selector with `kubectl get pods -l` first.
+4. A site-B transient: every Kafka pod with `site=b`, `maxAffectedBrokers` = the site-B pod count. In A6 that is every pod of KB, which the safety guard rejects as a plan and as a resilience run: run it outside Kates, with `kubectl delete pod -l`, while a REST INTEGRITY run writes (no `rpoMs`), and check its selector with `kubectl get pods -l` first.
 
 The pods come back within seconds: this is not an outage test.
 

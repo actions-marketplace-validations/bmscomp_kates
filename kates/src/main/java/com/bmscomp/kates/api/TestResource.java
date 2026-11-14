@@ -39,7 +39,6 @@ import org.jboss.logging.Logger;
 
 import com.bmscomp.kates.audit.AuditTrail;
 import com.bmscomp.kates.audit.Audited;
-import com.bmscomp.kates.chaos.ChaosProvider;
 import com.bmscomp.kates.domain.CreateTestRequest;
 import com.bmscomp.kates.domain.PruneResponse;
 import com.bmscomp.kates.domain.TestResult;
@@ -95,7 +94,6 @@ public class TestResource {
 
     private final TestOrchestrator orchestrator;
     private final TestRunRepository repository;
-    private final ChaosProvider chaosProvider;
 
     @Inject
     BaselineService baselineService;
@@ -110,13 +108,9 @@ public class TestResource {
     AuditTrail auditTrail;
 
     @Inject
-    public TestResource(
-            TestOrchestrator orchestrator,
-            TestRunRepository repository,
-            @jakarta.inject.Named("kubernetes") ChaosProvider chaosProvider) {
+    public TestResource(TestOrchestrator orchestrator, TestRunRepository repository) {
         this.orchestrator = orchestrator;
         this.repository = repository;
-        this.chaosProvider = chaosProvider;
     }
 
     @Audited(action = "CREATE", type = "test")
@@ -134,6 +128,7 @@ public class TestResource {
                     + " Idempotency-Key that is blank, over 128 characters or holds a control character;"
                     + " fieldErrors names each field")
     @APIResponse(responseCode = "429", description = "Concurrency limit reached — retry later")
+    @APIResponse(responseCode = "503", description = "The API is draining and starts nothing — retry later")
     @APIResponse(
             responseCode = "500",
             description = "A fault in the Kates API, such as its database being unreachable; the run did not start")
@@ -181,7 +176,8 @@ public class TestResource {
             Exception failure = result.asFailure().orElseThrow();
             ApiError error = notStarted(request, failure);
             Response.ResponseBuilder answer = Response.status(error.getStatus()).entity(error);
-            if (failure instanceof com.bmscomp.kates.engine.ConcurrencyLimitException) {
+            if (failure instanceof com.bmscomp.kates.engine.ConcurrencyLimitException
+                    || failure instanceof com.bmscomp.kates.engine.DrainingException) {
                 answer.header("Retry-After", RETRY_AFTER_SECONDS);
             }
             return answer.build();
@@ -226,6 +222,9 @@ public class TestResource {
         // to CI, which then retried nothing and failed the build instead.
         if (failure instanceof com.bmscomp.kates.engine.ConcurrencyLimitException) {
             return ApiError.of(429, "Too Many Requests", failure.getMessage());
+        }
+        if (failure instanceof com.bmscomp.kates.engine.DrainingException) {
+            return ApiError.of(503, "Service Unavailable", failure.getMessage());
         }
         if (failure instanceof com.bmscomp.kates.engine.InvalidTestSpecException invalid) {
             return ApiError.validationFailed(invalid.getMessage(), invalid.getFieldErrors());

@@ -86,11 +86,11 @@ var mcpAdHocBounds = map[string]mcpAdHocBound{
 // type. A step may set it only for its own type, so a plan never carries a
 // number its type never reads. The providers read them differently, and the
 // field descriptions say so: the kubernetes provider sizes IO_STRESS by
-// ioWorkers alone (KubernetesChaosProvider.java:525-538), while litmus-crd
+// ioWorkers alone (KubernetesChaosProvider.java:533-546), while litmus-crd
 // sizes it by fillPercentage as well as ioWorkers
 // (LitmusChaosProvider.java:319-323). Both honour gracePeriodSec: litmus-crd
 // hands a POD_DELETE to the kubernetes provider, which deletes the pod with it
-// (LitmusChaosProvider.java:41-59,86-88; KubernetesChaosProvider.java:205-213).
+// (LitmusChaosProvider.java:42-60,87-89; KubernetesChaosProvider.java:205-213).
 // fillPercentage stays out of ad-hoc plans with DISK_FILL, the one type it is
 // meant for.
 var mcpAdHocTypeParam = map[string]string{
@@ -742,7 +742,7 @@ func mcpPreviewStepFrom(call *mcpCall, ds client.StepPreview, fs *mcpFaultSpecVi
 // mcpTargetingOf names how a step picks its pods, in the precedence
 // PodTargets.mode applies (chaos/PodTargets.java:40-51) after the orchestrator
 // has turned a targetTopic into the partition leader's broker id
-// (DisruptionOrchestrator.java:253-261). SCALE_DOWN picks node pools instead
+// (DisruptionOrchestrator.java:255-263). SCALE_DOWN picks node pools instead
 // (DisruptionSafetyGuard.java:497-503).
 func mcpTargetingOf(fs *mcpFaultSpecView) string {
 	switch {
@@ -773,7 +773,7 @@ func mcpTargetingOf(fs *mcpFaultSpecView) string {
 // experiment and routes those four, POD_DELETE, NETWORK_PARTITION,
 // ROLLING_RESTART and SCALE_DOWN, to the kubernetes provider: experimentName
 // picks the experiment only for a step without a type
-// (LitmusChaosProvider.java:29-59,86-88,233-260), and otherwise only names
+// (LitmusChaosProvider.java:30-60,87-89,239-260), and otherwise only names
 // the fault. The plan's wording is a follow-up.
 //
 // A targetNamespace is within them when it is kafkaNamespace, the one the
