@@ -4,6 +4,7 @@ import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.event.Observes;
 import jakarta.inject.Inject;
@@ -14,11 +15,14 @@ import io.fabric8.kubernetes.api.model.ObjectMeta;
 import io.fabric8.kubernetes.api.model.networking.v1.NetworkPolicy;
 import io.fabric8.kubernetes.client.KubernetesClient;
 import io.quarkus.runtime.StartupEvent;
+import io.quarkus.scheduler.Scheduled;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.jboss.logging.Logger;
 
+import com.bmscomp.kates.chaos.FaultMarks;
 import com.bmscomp.kates.chaos.KubernetesChaosProvider;
 import com.bmscomp.kates.chaos.ScaleDownSnapshots;
+import com.bmscomp.kates.chaos.litmus.ChaosEngine;
 
 /**
  * Cleans up faults abandoned by a previous process.
@@ -51,6 +55,19 @@ public class DisruptionOrphanReconciler {
     @Inject
     ObjectMapper objectMapper;
 
+    // Built without config, as the tests build it, a Quorum is alone and always leads.
+    @Inject
+    com.bmscomp.kates.quorum.Quorum quorum = new com.bmscomp.kates.quorum.Quorum();
+
+    @Inject
+    com.bmscomp.kates.engine.TestOrchestrator orchestrator;
+
+    /** When this member took over, or this lone process started: its own faults are made after. */
+    volatile Instant since;
+
+    /** Whether an undo of the pass running now failed: its reports stay RUNNING until one succeeds. */
+    private boolean undoFailed;
+
     @ConfigProperty(name = "kates.chaos.orphan-recovery.enabled", defaultValue = "true")
     boolean enabled;
 
@@ -68,6 +85,10 @@ public class DisruptionOrphanReconciler {
             LOG.debug("Disruption orphan recovery disabled");
             return;
         }
+        // In a quorum the leader may be running a plan right now: the next leader cleans up instead.
+        if (quorum.memberId() != null) {
+            return;
+        }
         // Off the startup thread, deliberately.
         //
         // Every call below goes to the Kubernetes API, and a StartupEvent
@@ -83,19 +104,62 @@ public class DisruptionOrphanReconciler {
         //
         // Recovery is cleanup of faults made before this process started.
         // Nothing about it needs to happen before the first request is served.
+        since = startedAt;
         Thread.ofVirtual().name("disruption-orphan-recovery").start(() -> reconcile(startedAt));
     }
 
-    private void reconcile(Instant startedAt) {
+    /**
+     * A new leader cleans up what the previous one left: every Kates fault made before this member
+     * found it leads is a previous leader's. Off the caller's thread, as at startup: the Kubernetes
+     * API may be slow to answer, and runs are already recovered.
+     */
+    void onTakeover(@Observes com.bmscomp.kates.quorum.LeadershipAcquired takeover) {
+        if (enabled) {
+            since = takeover.at();
+            Thread.ofVirtual().name("disruption-orphan-recovery").start(() -> reconcile(takeover.at()));
+        }
+    }
+
+    /**
+     * The leader keeps cleaning up, not only at takeover: a paused leader's late write carries an
+     * older term (J4 F1), and a Kubernetes API or database that was down at takeover is back later
+     * (F4, F8). Only faults of an older term or past their deadline are undone here, never by age.
+     */
+    @Scheduled(
+            every = "${kates.quorum.reconcile-interval:10s}",
+            identity = "fault-reconcile",
+            concurrentExecution = Scheduled.ConcurrentExecution.SKIP)
+    void periodic() {
+        if (enabled && since != null && quorum.acceptsWrites()) {
+            reconcile(null);
+        }
+    }
+
+    /** One pass: with {@code startedAt}, also every Kates fault made before it, as at start or takeover. */
+    private synchronized void reconcile(Instant startedAt) {
+        undoFailed = false;
         try {
             int policies = reconcileNetworkPolicies(startedAt);
+            int engines = reconcileChaosEngines(startedAt);
             ScaleDownSnapshots.Restored scaled = reconcileScaleDowns(startedAt);
-            int reports = markInterruptedReports(startedAt);
-            if (policies + scaled.total() + reports > 0) {
+            int cordons = reconcileCordons(startedAt);
+            if (orchestrator != null) {
+                try {
+                    // After the faults: a database that hangs must not hold a partition (J4 review).
+                    // Retried every pass, since a takeover with PostgreSQL down did not get to it.
+                    orchestrator.recoverPreviousLeaders();
+                } catch (RuntimeException e) {
+                    LOG.debugf("The previous leader's runs are not recovered yet: %s", e.getMessage());
+                }
+            }
+            // A report says INTERRUPTED only once its faults are out (s08b reported it with one in).
+            int reports = undoFailed ? 0 : markInterruptedReports(startedAt != null ? startedAt : since);
+            if (policies + engines + scaled.total() + cordons + reports > 0) {
                 LOG.warnf(
-                        "Orphan recovery: removed %d NetworkPolicy(ies), restored %d KafkaNodePool(s) and %d"
-                                + " StatefulSet(s), marked %d report(s) INTERRUPTED",
-                        policies, scaled.nodePools(), scaled.statefulSets(), reports);
+                        "Orphan recovery: removed %d NetworkPolicy(ies) and %d ChaosEngine(s), restored %d"
+                                + " KafkaNodePool(s) and %d StatefulSet(s), uncordoned %d node(s), marked %d"
+                                + " report(s) INTERRUPTED",
+                        policies, engines, scaled.nodePools(), scaled.statefulSets(), cordons, reports);
             }
         } catch (Exception e) {
             // Never block startup on cleanup — the API must come up either way.
@@ -104,12 +168,90 @@ public class DisruptionOrphanReconciler {
     }
 
     /**
+     * Whether a Kates fault's object is no live fault's: past its deadline, or written by a leader
+     * of an older term, or, in a pass with {@code ageCutoffMs}, made before it. Which is how a
+     * lone instance tells the previous process's faults from its own, and how objects from before
+     * the marks existed are judged.
+     */
+    boolean isStray(ObjectMeta meta, Long ageCutoffMs, Instant now) {
+        Map<String, String> marks = meta.getAnnotations() != null ? meta.getAnnotations() : Map.of();
+        String deadline = marks.get(FaultMarks.DEADLINE);
+        if (deadline != null) {
+            try {
+                if (Instant.parse(deadline).isBefore(now)) {
+                    return true;
+                }
+            } catch (java.time.format.DateTimeParseException ignored) {
+                // judged as if unmarked
+            }
+        }
+        String term = marks.get(FaultMarks.TERM);
+        if (term != null && quorum.memberId() != null) {
+            try {
+                if (Long.parseLong(term) < quorum.term()) {
+                    return true;
+                }
+            } catch (NumberFormatException ignored) {
+                // judged as if unmarked
+            }
+        }
+        return ageCutoffMs != null && isOlderThan(meta.getCreationTimestamp(), ageCutoffMs);
+    }
+
+    /**
+     * Deletes the Kates ChaosEngines no live fault owns, in every namespace, as Litmus cleanup does
+     * in-process. Litmus node-drain's cordon is Litmus' to revert; {@link #reconcileCordons} undoes the
+     * kubernetes provider's.
+     */
+    int reconcileChaosEngines(Instant startedAt) {
+        Long cutoff = startedAt == null ? null : cutoff(startedAt);
+        List<ChaosEngine> engines;
+        try {
+            engines = kubeClient
+                    .resources(ChaosEngine.class)
+                    .inAnyNamespace()
+                    .withLabel("managed-by", "kates")
+                    .list()
+                    .getItems();
+        } catch (io.fabric8.kubernetes.client.KubernetesClientException e) {
+            // 404: no Litmus, so no engine Kates made. Anything else: whether one is in is unknown.
+            if (e.getCode() != 404) {
+                undoFailed = true;
+            }
+            LOG.debugf("Could not list ChaosEngines: %s", e.getMessage());
+            return 0;
+        }
+        Instant now = Instant.now();
+        int removed = 0;
+        for (ChaosEngine engine : engines) {
+            if (!isStray(engine.getMetadata(), cutoff, now)) {
+                continue;
+            }
+            String namespace = engine.getMetadata().getNamespace();
+            String name = engine.getMetadata().getName();
+            try {
+                kubeClient
+                        .resources(ChaosEngine.class)
+                        .inNamespace(namespace)
+                        .withName(name)
+                        .delete();
+                removed++;
+            } catch (Exception e) {
+                undoFailed = true;
+                LOG.warnf("Could not undo ChaosEngine %s/%s: %s", namespace, name, e.getMessage());
+            }
+        }
+        return removed;
+    }
+
+    /**
      * Deletes the Kates-managed NetworkPolicies (network partitions) left from
      * before this process started, in every namespace, as cleanup does: a
      * playbook can isolate pods outside the Kafka namespace.
      */
     int reconcileNetworkPolicies(Instant startedAt) {
-        long cutoff = cutoff(startedAt);
+        Long cutoff = startedAt == null ? null : cutoff(startedAt);
+        Instant now = Instant.now();
         List<NetworkPolicy> policies;
         try {
             policies = kubeClient
@@ -124,11 +266,13 @@ public class DisruptionOrphanReconciler {
             // (dev, unit tests) is normal and must not dump a stack trace on
             // every boot.
             LOG.warnf("Could not reconcile orphaned NetworkPolicies: %s", e.getMessage());
+            // Whether a partition is still in is unknown: no report says INTERRUPTED on that.
+            undoFailed = true;
             return 0;
         }
         int removed = 0;
         for (NetworkPolicy policy : policies) {
-            if (!isOlderThan(policy.getMetadata().getCreationTimestamp(), cutoff)) {
+            if (!isStray(policy.getMetadata(), cutoff, now)) {
                 continue;
             }
             String namespace = policy.getMetadata().getNamespace();
@@ -145,6 +289,7 @@ public class DisruptionOrphanReconciler {
                 LOG.warnf("Orphan recovery: deleted abandoned NetworkPolicy %s/%s", namespace, name);
                 removed++;
             } catch (Exception e) {
+                undoFailed = true;
                 LOG.warnf("Could not delete orphaned NetworkPolicy %s/%s: %s", namespace, name, e.getMessage());
             }
         }
@@ -158,8 +303,62 @@ public class DisruptionOrphanReconciler {
      * it, which is exactly what makes recovery possible here.
      */
     ScaleDownSnapshots.Restored reconcileScaleDowns(Instant startedAt) {
-        long cutoff = cutoff(startedAt);
-        return ScaleDownSnapshots.restore(kubeClient, kafkaNamespace, meta -> isScaleDownOlderThan(meta, cutoff));
+        Long cutoff = startedAt == null ? null : cutoff(startedAt);
+        Instant now = Instant.now();
+        return ScaleDownSnapshots.restoreEverywhere(
+                kubeClient,
+                kafkaNamespace,
+                meta -> isStray(meta, null, now) || (cutoff != null && isScaleDownOlderThan(meta, cutoff)));
+    }
+
+    /**
+     * Uncordons the nodes a kubernetes-provider NODE_DRAIN cordoned and no
+     * live fault owns: past their deadline, of an older term, or, at start or
+     * takeover, cordoned before it. Judged by the cordon's own time, not the
+     * node's age.
+     */
+    int reconcileCordons(Instant startedAt) {
+        Long cutoff = startedAt == null ? null : cutoff(startedAt);
+        Instant now = Instant.now();
+        List<io.fabric8.kubernetes.api.model.Node> nodes;
+        try {
+            nodes = kubeClient
+                    .nodes()
+                    .withLabel(KubernetesChaosProvider.CORDONED_LABEL)
+                    .list()
+                    .getItems();
+        } catch (Exception e) {
+            LOG.debugf("Could not list the nodes Kates cordoned: %s", e.getMessage());
+            undoFailed = true;
+            return 0;
+        }
+        int uncordoned = 0;
+        for (var node : nodes) {
+            ObjectMeta meta = node.getMetadata();
+            if (!isStray(meta, null, now) && !(cutoff != null && isCordonedBefore(meta, cutoff))) {
+                continue;
+            }
+            try {
+                KubernetesChaosProvider.uncordon(kubeClient, meta.getName());
+                LOG.warnf("Orphan recovery: uncordoned node %s, which a NODE_DRAIN left cordoned", meta.getName());
+                uncordoned++;
+            } catch (Exception e) {
+                undoFailed = true;
+                LOG.warnf("Could not uncordon node %s: %s", meta.getName(), e.getMessage());
+            }
+        }
+        return uncordoned;
+    }
+
+    private static boolean isCordonedBefore(ObjectMeta meta, long cutoff) {
+        String stamp = meta.getAnnotations() != null
+                ? meta.getAnnotations().get(KubernetesChaosProvider.CORDONED_AT_ANNOTATION)
+                : null;
+        try {
+            return stamp != null && Long.parseLong(stamp) < cutoff;
+        } catch (NumberFormatException e) {
+            return false;
+        }
     }
 
     private long cutoff(Instant startedAt) {

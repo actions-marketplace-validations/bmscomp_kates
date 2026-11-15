@@ -202,6 +202,45 @@ pub struct ComplianceAnswer {
     pub check_id: Option<String>,
 }
 
+/// The answer of `/api/drain`. `drained`: the switch is set and nothing is live, so the pod can
+/// be replaced without losing a run or leaving a fault in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Drain {
+    pub draining: bool,
+    pub drained: bool,
+    #[serde(default)]
+    pub live_runs: u32,
+    #[serde(default)]
+    pub faults_in_flight: u32,
+    #[serde(default)]
+    pub webhooks_in_flight: u32,
+}
+
+/// `/api/health`'s `quorum`, as one member sees it.
+#[derive(Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct QuorumView {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub member_id: Option<String>,
+    /// It leads, and has committed an entry of its term.
+    #[serde(default)]
+    pub leader: bool,
+    #[serde(default)]
+    pub leader_id: Option<String>,
+    #[serde(default)]
+    pub term: i64,
+    /// The last entry it applied; -1 with an empty log, when it is no voter.
+    #[serde(default = "no_entry")]
+    pub applied_index: i64,
+}
+
+fn no_entry() -> i64 {
+    -1
+}
+
 /// One Kates API. The key travels per call, so a rotated key needs no new client.
 #[derive(Clone)]
 pub struct Client {
@@ -261,6 +300,50 @@ impl Client {
             .json(Method::GET, "/api/health", "/api/health", key, None, None)
             .await?;
         Ok(health.capabilities)
+    }
+
+    /// The member's view of its quorum, from the public `GET /api/health`: no key is sent. A
+    /// backend with no quorum, or one older than it, says `enabled: false`.
+    ///
+    /// # Errors
+    /// See [`Error`].
+    pub async fn quorum(&self) -> Result<QuorumView, Error> {
+        #[derive(Deserialize)]
+        struct Health {
+            #[serde(default)]
+            quorum: QuorumView,
+        }
+        let none = SecretString::from(String::new());
+        let health: Health = self
+            .json(Method::GET, "/api/health", "/api/health", &none, None, None)
+            .await?;
+        Ok(health.quorum)
+    }
+
+    /// `GET /api/drain`.
+    ///
+    /// # Errors
+    /// See [`Error`]. An API older than the switch answers 404.
+    pub async fn drain(&self, key: &SecretString) -> Result<Drain, Error> {
+        self.json(Method::GET, "/api/drain", "/api/drain", key, None, None)
+            .await
+    }
+
+    /// `PUT /api/drain`: starts or lifts a drain, and answers the state after it.
+    ///
+    /// # Errors
+    /// See [`Error`]. It needs the admin scope.
+    pub async fn set_drain(&self, key: &SecretString, draining: bool) -> Result<Drain, Error> {
+        let body = serde_json::json!({"draining": draining});
+        self.json(
+            Method::PUT,
+            "/api/drain",
+            "/api/drain",
+            key,
+            None,
+            Some(&body),
+        )
+        .await
     }
 
     /// Starts a run, or finds the one `idempotency_key` already started.
@@ -479,6 +562,8 @@ async fn capped(mut response: Response) -> Result<Vec<u8>, String> {
 fn method_name(method: &Method) -> &'static str {
     if *method == Method::GET {
         "GET"
+    } else if *method == Method::PUT {
+        "PUT"
     } else {
         "POST"
     }
@@ -559,6 +644,32 @@ mod tests {
             .mount(&server)
             .await;
         client(&server).get_test(&key(), "r").await.unwrap_err()
+    }
+
+    #[tokio::test]
+    async fn set_drain_puts_the_switch_and_reads_the_state_back() {
+        let server = MockServer::start().await;
+        Mock::given(method("PUT"))
+            .and(path("/api/drain"))
+            .and(header("authorization", "Bearer the-key"))
+            .and(wiremock::matchers::body_json(json!({"draining": true})))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "draining": true, "liveRuns": 1, "faultsInFlight": 0,
+                "webhooksInFlight": 2, "drained": false,
+            })))
+            .mount(&server)
+            .await;
+        let drain = client(&server).set_drain(&key(), true).await.unwrap();
+        assert_eq!(
+            drain,
+            Drain {
+                draining: true,
+                drained: false,
+                live_runs: 1,
+                faults_in_flight: 0,
+                webhooks_in_flight: 2,
+            }
+        );
     }
 
     #[tokio::test]

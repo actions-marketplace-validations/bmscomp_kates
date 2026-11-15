@@ -324,7 +324,7 @@ func mcpActivityTestsSince(ctx context.Context, call *mcpCall, since time.Time, 
 // are injected for part of its run, or one whose backend process stopped
 // before it ended and has not started again to mark it INTERRUPTED
 // (DisruptionLauncher.java:95-123, DisruptionReportRepository.java:35-43,
-// DisruptionOrphanReconciler.java:171-222).
+// DisruptionOrphanReconciler.java:412-446).
 func mcpActivityDisruptionsSince(ctx context.Context, call *mcpCall, since time.Time, page mcpActivityPage) (mcpActivityDisruptions, error) {
 	out := mcpActivityDisruptions{StoredAsRunning: []mcpActivityDisruptionRow{}, Since: []mcpActivityDisruptionRow{}}
 	for p := 0; p < mcpActivityMaxPages; p++ {
@@ -451,20 +451,22 @@ var mcpCaveatsRunsActivity = []mcpCaveat{
 			"acted. Every REST and gRPC call that changes something leaves a row, a refused or failed one too, " +
 			"with how it ended in details, and its target is the id of the run or disruption it started when it " +
 			"started one. The Kates API's daily retention sweep leaves one as system:scheduler for each finished " +
-			"run it deletes. A call without a valid key, and a dry run, leave none. Rows written before the Kates " +
+			"run it deletes. A call without a valid key, and a dry run, leave none, and so does a REST call " +
+			"answered 503 because the Kates API could not reach its database, which it logs instead. Rows written before the Kates " +
 			"API recorded actors name no one, and then only the REST test endpoints wrote rows at all. Runs and " +
 			"disruption reports record no owner of their own: who started one shows only in its audit row.",
 		Refs: []string{
 			mcpAnchoredRef(mcpJava+"service/RunRetention.java:82",
 				`auditService.record("DELETE", "test", id, auditDetails, actor);`),
 			mcpAnchoredRef(mcpJava+"service/TestCleanupScheduler.java:97", "Actor.SCHEDULER"),
-			mcpAnchoredRef(mcpJava+"audit/AuditResponseFilter.java:42-62",
-				"public void filter(ContainerRequestContext request", "if (actor == null)", "static String idOf("),
+			mcpAnchoredRef(mcpJava+"audit/AuditResponseFilter.java:44-78",
+				"public void filter(ContainerRequestContext request", "if (actor == null)", "if (isDatabaseOutage(response))",
+				"static String idOf("),
 			mcpAnchoredRef(mcpJava+"security/GrpcApiKeyInterceptor.java:67-70,100,156-159",
 				"static final Map<String, String> AUDITED", "audit(action, method, Status.Code.PERMISSION_DENIED",
 				"private void audit("),
-			mcpAnchoredRef(mcpJava+"schedule/TestScheduler.java:114-120", "Actor.SCHEDULER"),
-			mcpAnchoredRef(mcpJava+"disruption/DisruptionScheduler.java:120-126", "Actor.SCHEDULER"),
+			mcpAnchoredRef(mcpJava+"schedule/TestScheduler.java:117-123", "Actor.SCHEDULER"),
+			mcpAnchoredRef(mcpJava+"disruption/DisruptionScheduler.java:129-135", "Actor.SCHEDULER"),
 			mcpAnchoredRef(mcpJava+"disruption/DisruptionResource.java:93", "auditTrail.done();"),
 			"kates/src/main/resources/db/migration/V26__audit_actor.sql:1-8",
 		},
@@ -484,9 +486,9 @@ var mcpCaveatsRunsActivity = []mcpCaveat{
 			mcpJava + "disruption/DisruptionLauncher.java:114-144",
 			mcpJava + "disruption/DisruptionPersistence.java:16-37",
 			mcpJava + "disruption/DisruptionReportRepository.java:20-43",
-			mcpJava + "disruption/DisruptionOrphanReconciler.java:171-222",
+			mcpJava + "disruption/DisruptionOrphanReconciler.java:387-421",
 			mcpJava + "disruption/DisruptionTemplateResource.java:70-72",
-			mcpJava + "disruption/DisruptionScheduler.java:108-120",
+			mcpJava + "disruption/DisruptionScheduler.java:117-129",
 			mcpJava + "disruption/DisruptionReportEntity.java:39-47",
 			mcpAnchoredRef(mcpJava+"disruption/DisruptionAnalysisResource.java:118-203",
 				`@Path("/compound")`, `"results", outcome.results()`),

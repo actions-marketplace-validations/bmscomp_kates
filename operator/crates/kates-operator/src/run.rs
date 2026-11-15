@@ -17,7 +17,7 @@ use k8s_openapi::api::authorization::v1::{
     ResourceAttributes, SelfSubjectAccessReview, SelfSubjectAccessReviewSpec,
 };
 use kates_crds::{KafkaCompliance, Kates, KatesTest};
-use kube::api::{Api, DynamicObject, PostParams};
+use kube::api::{Api, DynamicObject, ListParams, PostParams};
 use kube::discovery;
 use kube::runtime::Controller;
 use kube::runtime::events::{Recorder, Reporter};
@@ -27,6 +27,7 @@ use kube::{Client, ResourceExt as _};
 use kube_lease_manager::{LeaseManager, LeaseManagerBuilder};
 use prometheus_client::encoding::text::encode;
 use prometheus_client::registry::Registry;
+use serde::de::DeserializeOwned;
 use tokio::net::TcpListener;
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::watch;
@@ -227,6 +228,7 @@ async fn lead(args: LeadArgs) -> Fallible {
     });
 
     kates::sweep(&ctx).await?;
+    warn_deprecated(&scope, &client).await;
     let mut streams: Vec<BoxStream<'static, ()>> = Vec::new();
     for api in scope.apis::<KatesTest>(&client) {
         let controller = Controller::new(api, watcher::Config::default())
@@ -274,6 +276,30 @@ async fn lead(args: LeadArgs) -> Fallible {
     }
     stream::select_all(streams).collect::<()>().await;
     Ok(())
+}
+
+// Both run kinds go in 0.3.0: say so at start while one of their resources is left.
+async fn warn_deprecated(scope: &Scope, client: &Client) {
+    warn_if_used(scope.apis::<KatesTest>(client), "kates test apply").await;
+    warn_if_used(
+        scope.apis::<KafkaCompliance>(client),
+        "kates compliance check",
+    )
+    .await;
+}
+
+async fn warn_if_used<K>(apis: Vec<Api<K>>, replacement: &str)
+where
+    K: kube::Resource<DynamicType = ()> + Clone + DeserializeOwned + std::fmt::Debug,
+{
+    for api in apis {
+        let page = api.list_metadata(&ListParams::default().limit(1)).await;
+        if page.is_ok_and(|page| !page.items.is_empty()) {
+            let kind = K::kind(&());
+            tracing::warn!(%kind, "{kind} is deprecated and goes in kates-operator 0.3.0: run {replacement} from a CronJob instead");
+            return;
+        }
+    }
 }
 
 // A failed pass is already counted and logged by its error policy.
@@ -519,7 +545,7 @@ mod tests {
     const SERVED: &str = r#"{"components":{"schemas":{
         "io.kates.v1alpha1.KatesTest":{"description":"crd-version: 1"},
         "io.kates.v1alpha1.KafkaCompliance":{"description":"crd-version: 1"},
-        "io.kates.v1alpha1.Kates":{"description":"crd-version: 1"}}}}"#;
+        "io.kates.v1alpha1.Kates":{"description":"crd-version: 2"}}}}"#;
 
     const VERSION: &str = r#"{"major":"1","minor":"34","gitVersion":"v1.34.11","gitCommit":"c",
         "gitTreeState":"clean","buildDate":"2026-01-01T00:00:00Z","goVersion":"go1.25",

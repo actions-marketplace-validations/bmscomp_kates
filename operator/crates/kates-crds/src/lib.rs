@@ -13,7 +13,9 @@ pub use compat::breaking;
 pub use kafkacompliance::{
     ComplianceCounts, FailedRule, KafkaCompliance, KafkaComplianceSpec, KafkaComplianceStatus,
 };
-pub use kates::{Database, Kafka, Kates, KatesSpec, KatesStatus, Sasl, SecretKey, SecretName};
+pub use kates::{
+    Database, Kafka, Kates, KatesSpec, KatesStatus, Mode, Quorum, Sasl, SecretKey, SecretName,
+};
 pub use katestest::{KatesTest, KatesTestSpec, KatesTestStatus, Phase, RunSummary, TestType};
 
 /// Every CRD this build carries, for `crdgen` and `crds apply`.
@@ -48,6 +50,21 @@ mod tests {
     fn the_marker_ends_the_description() {
         assert_eq!(crd_version("One Kates run. crd-version: 12"), Some(12));
         assert_eq!(crd_version("One Kates run."), None);
+    }
+
+    #[test]
+    fn the_run_kinds_are_deprecated_and_kates_is_not() {
+        for crd in crds() {
+            let version = &crd.spec.versions[0];
+            let deprecated = crd.spec.names.kind != "Kates";
+            assert_eq!(
+                version.deprecated.unwrap_or(false),
+                deprecated,
+                "{}",
+                crd.spec.names.kind
+            );
+            assert_eq!(version.deprecation_warning.is_some(), deprecated);
+        }
     }
 
     #[test]
