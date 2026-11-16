@@ -37,6 +37,14 @@ spec:
   template:
     metadata: {labels: {app: $name-db}}
     spec:
+      # On the control plane where it can: e2e-node-loss.sh takes a worker away, and the members
+      # would all lose PostgreSQL with it.
+      tolerations: [{key: node-role.kubernetes.io/control-plane, operator: Exists, effect: NoSchedule}]
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              preference: {matchExpressions: [{key: node-role.kubernetes.io/control-plane, operator: Exists}]}
       containers:
         - name: postgres
           image: postgres:17-alpine
@@ -266,7 +274,17 @@ for _ in $(seq 1 90); do
   second=; sleep 1
 done
 handed=$(( $(date +%s) - start ))
-[ -n "$second" ] && pass "$second leads $handed s after $cut lost PostgreSQL" || fail "$cut still leads 90 s after losing PostgreSQL"
+if [ -n "$second" ]; then
+  pass "$second leads $handed s after $cut lost PostgreSQL"
+else
+  fail "$cut still leads 90 s after losing PostgreSQL"
+  # The resource is deleted before CI's Show the stack: each member's last lines, here.
+  echo "--- status: $("${k[@]}" get kates "$name" -o jsonpath="{.status}")"; "${k[@]}" get pods -o wide
+  for pod in "$name-0" "$name-1" "$name-2"; do
+    echo "--- $pod"
+    "${k[@]}" logs "$pod" --since=150s | grep -vE 'VertxGrpcSender|"level":"DEBUG"' | cut -c1-800 | tail -60
+  done
+fi
 connect
 # An empty body: the leader answers 400, a member that does not lead 503, before validation.
 check "the new leader takes writes" 400 "$(curl -s -m 5 -o /dev/null -w '%{http_code}' -X POST "$api/api/tests" \
