@@ -12,7 +12,7 @@ require (
 	github.com/charmbracelet/x/ansi v0.11.8
 	github.com/go-pdf/fpdf v0.9.0
 	github.com/google/jsonschema-go v0.4.3
-	github.com/mattn/go-runewidth v0.0.30
+	github.com/mattn/go-runewidth v0.0.31
 	github.com/modelcontextprotocol/go-sdk v1.8.0
 	github.com/muesli/termenv v0.16.0
 	github.com/spf13/cobra v1.10.2
