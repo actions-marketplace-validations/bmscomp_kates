@@ -14,7 +14,7 @@ kates-crds = { path = "../kates-crds" }
 futures = "0.3"
 http = "1"
 jiff = "0.2"
-json-patch = "4"
+json-patch = "5"
 # The members' quorum CA and certificates, on the aws-lc-rs backend rustls already uses.
 rcgen = { version = "0.14", default-features = false, features = ["aws_lc_rs", "pem"] }
 kube-lease-manager = "0.13"
